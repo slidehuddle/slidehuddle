@@ -3,8 +3,17 @@ const BAR_CLASS = "slidehuddle-bar";
 const STYLE_ID = "slidehuddle-style";
 const FONT_LINK_ID = "slidehuddle-font";
 const SCAN_DEBOUNCE_MS = 1500;
-const API_ENDPOINT = "http://localhost:3000/api/slides";
 const CAPTURE_TIMEOUT_MS = 5000;
+
+// === Endpoint configuration ===
+// Flip PRODUCTION to false when developing against the local Next.js dev
+// server (needs `npm run dev` from the web/ folder and a populated
+// web/.env.local pointing at Supabase). Leave true for the live Vercel
+// deployment which is what real users will hit.
+const PRODUCTION = true;
+const API_ENDPOINT = PRODUCTION
+  ? "https://slidehuddleapp.vercel.app/api/slides"
+  : "http://localhost:3000/api/slides";
 
 const INLINE_SLIDE_IFRAME_PATTERNS = [
   /\.claudemcpcontent\.com\//i,
