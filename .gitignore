@@ -1,1 +1,6 @@
 .claude/
+
+# env files — never commit secrets. web/.gitignore covers web/.env.local
+# already, but this defends against any .env created elsewhere in the repo
+# (e.g. at the extension's root for a future build step).
+.env*
