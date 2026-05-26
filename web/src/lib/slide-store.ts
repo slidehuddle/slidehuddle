@@ -12,9 +12,11 @@
 import { getSupabaseAdmin } from "./supabase";
 
 function generateDeckId(): string {
-  // ~36-bit ID, base36-encoded → 8 chars. Tiny collision chance at our
-  // scale; we'd handle by retrying inserts if it ever becomes a real risk.
-  return Math.random().toString(36).slice(2, 10);
+  // Cryptographically random, ~128 bits of entropy, base36 ≈ 25 chars.
+  // Math.random() is predictable enough that an attacker observing a few
+  // IDs could narrow the search space for adjacent decks; crypto.randomUUID
+  // closes that.
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 22);
 }
 
 export async function storeSlides(html: string): Promise<string> {
