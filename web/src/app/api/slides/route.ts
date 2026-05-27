@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storeSlides } from "@/lib/slide-store";
+import { getSupabaseServer } from "@/lib/supabase-server";
 
 // Hard cap on captured slide HTML. Claude decks we've seen are well under
 // 500KB; 2MB leaves comfortable headroom for image-heavy decks while
@@ -105,9 +106,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Best-effort auth: if the caller has a SlideHuddle session cookie,
+  // attach their user id. Extension POSTs from claude.ai won't have one —
+  // those decks stay as orphans (user_id NULL), still viewable by link
+  // but absent from any dashboard. See docs/architecture.md.
+  let userId: string | null = null;
+  try {
+    const supabase = await getSupabaseServer();
+    const { data } = await supabase.auth.getUser();
+    userId = data.user?.id ?? null;
+  } catch (err) {
+    console.warn("[/api/slides] auth lookup failed, continuing as anon:", err);
+  }
+
   let id: string;
   try {
-    id = await storeSlides(html);
+    id = await storeSlides(html, { userId });
   } catch (err) {
     console.error("[/api/slides] store failed:", err);
     return NextResponse.json(
