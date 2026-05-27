@@ -20,11 +20,19 @@ export default function LoginPage() {
 
     setStatus({ kind: "sending" });
 
+    // Forward any ?next=<path> through to /auth/callback so the user lands
+    // back where they started after signing in (e.g. a viewer URL).
+    const here = new URLSearchParams(window.location.search);
+    const next = here.get("next") ?? "";
+    const callbackUrl = next
+      ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
+      : `${window.location.origin}/auth/callback`;
+
     const supabase = getSupabaseBrowser();
     const { error } = await supabase.auth.signInWithOtp({
       email: trimmed,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: callbackUrl,
       },
     });
 

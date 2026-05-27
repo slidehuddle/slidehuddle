@@ -34,7 +34,11 @@ export default function ShareBar() {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
-    const text = window.location.href;
+    // Strip ?source=capture so recipients don't inherit the creator flag
+    // (which would let them try to claim an orphan deck).
+    const url = new URL(window.location.href);
+    url.searchParams.delete("source");
+    const text = url.toString();
     let ok = false;
     try {
       await navigator.clipboard.writeText(text);

@@ -1,7 +1,14 @@
 import SlideViewer from "./SlideViewer";
 import ShareBar from "./ShareBar";
+import SignInBanner from "./SignInBanner";
 import { SAMPLE_SLIDES_HTML } from "@/lib/sample-slides";
-import { getStoredSlides } from "@/lib/slide-store";
+import {
+  claimOrphanDeck,
+  getDeckMeta,
+  getStoredSlides,
+  trackSharedDeck,
+} from "@/lib/slide-store";
+import { getSupabaseServer } from "@/lib/supabase-server";
 
 export default async function ViewerPage({
   searchParams,
@@ -9,9 +16,11 @@ export default async function ViewerPage({
   searchParams: Promise<{
     slides?: string;
     id?: string;
+    source?: string;
   }>;
 }) {
-  const { slides, id } = await searchParams;
+  const { slides, id, source: sourceParam } = await searchParams;
+  const isCaptureSource = sourceParam === "capture";
 
   let html: string;
   let source: "param" | "stored" | "sample";
@@ -27,8 +36,40 @@ export default async function ViewerPage({
     source = "sample";
   }
 
+  // Decide what extra UI / side effects apply for stored decks.
+  // - signed-in creator on orphan deck → claim it
+  // - signed-in recipient (not owner) → record in shared_decks
+  // - signed-out → show the appropriate sign-in banner
+  let bannerVariant: "creator" | "recipient" | null = null;
+
+  if (source === "stored" && id) {
+    const supabase = await getSupabaseServer();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const deck = await getDeckMeta(id);
+    const isOwner = !!(user && deck && deck.user_id === user.id);
+
+    if (user && deck) {
+      if (isCaptureSource && deck.user_id === null) {
+        await claimOrphanDeck(id, user.id);
+      } else if (!isOwner && deck.user_id !== null) {
+        // Only track a "share" when the deck actually has an owner. Orphan
+        // decks (user_id NULL) belong to no one — nobody shared them — so
+        // they shouldn't show up under "Shared with me".
+        await trackSharedDeck(id, user.id);
+      }
+    } else if (!user) {
+      bannerVariant = isCaptureSource ? "creator" : "recipient";
+    }
+  }
+
   return (
     <main className="flex-1 flex flex-col">
+      {bannerVariant && id && (
+        <SignInBanner variant={bannerVariant} deckId={id} />
+      )}
       {source === "stored" && <ShareBar />}
       {source === "sample" && (
         <div className="px-8 py-2 text-xs text-muted border-b border-border">

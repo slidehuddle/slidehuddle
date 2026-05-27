@@ -85,3 +85,62 @@ export async function getStoredSlides(id: string): Promise<string | null> {
   }
   return data?.html_content ?? null;
 }
+
+export type DeckMeta = {
+  id: string;
+  user_id: string | null;
+};
+
+export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("decks")
+    .select("id, user_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[slide-store] meta fetch failed:", error);
+    return null;
+  }
+  return data as DeckMeta | null;
+}
+
+// Set user_id on an orphan deck. Only succeeds while the deck is unclaimed
+// (user_id IS NULL) — that's the guard against accidentally re-owning a
+// deck someone else already claimed. Returns true if the row was updated.
+export async function claimOrphanDeck(
+  deckId: string,
+  userId: string,
+): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("decks")
+    .update({ user_id: userId })
+    .eq("id", deckId)
+    .is("user_id", null)
+    .select("id");
+  if (error) {
+    console.error("[slide-store] claim failed:", error);
+    return false;
+  }
+  return Array.isArray(data) && data.length > 0;
+}
+
+// Record that a signed-in user has accessed a deck they don't own, so it
+// appears in their dashboard under "Shared with me". Idempotent — repeat
+// visits don't add duplicate rows (primary key is (deck_id, user_id)).
+export async function trackSharedDeck(
+  deckId: string,
+  userId: string,
+): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("shared_decks")
+    .upsert(
+      { deck_id: deckId, user_id: userId, role: "viewer" },
+      { onConflict: "deck_id,user_id", ignoreDuplicates: true },
+    );
+  if (error) {
+    console.error("[slide-store] track-share failed:", error);
+  }
+}
