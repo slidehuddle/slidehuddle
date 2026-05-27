@@ -7,6 +7,7 @@ type DeckRow = {
   title: string | null;
   created_at: string;
   slide_count: number | null;
+  version: number | null;
 };
 
 function formatDate(iso: string): string {
@@ -33,7 +34,7 @@ export default async function DashboardPage() {
   // .eq("user_id", user.id) here. Belt-and-braces: we add it anyway.
   const { data: decks, error } = await supabase
     .from("decks")
-    .select("id, title, created_at, slide_count")
+    .select("id, title, created_at, slide_count, version")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 
@@ -45,24 +46,6 @@ export default async function DashboardPage() {
 
   return (
     <main className="flex-1 flex flex-col">
-      <header className="flex items-center justify-between px-8 py-5 border-b border-border">
-        <Link href="/" className="flex items-center gap-2 text-brand font-semibold">
-          <span className="inline-block h-6 w-6 rounded-md bg-brand" />
-          SlideHuddle
-        </Link>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-muted">{user.email}</span>
-          <form action="/auth/signout" method="post">
-            <button
-              type="submit"
-              className="text-sm font-semibold text-brand hover:text-brand-hover"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </header>
-
       <section className="flex-1 px-8 py-10 max-w-5xl w-full mx-auto flex flex-col gap-8">
         <div className="flex flex-col gap-2">
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
@@ -79,34 +62,43 @@ export default async function DashboardPage() {
               No decks yet
             </h2>
             <p className="text-muted max-w-md">
-              Use the SlideHuddle Chrome extension on claude.ai to capture a
-              slide deck. It&apos;ll show up here once you do.
+              Go to Claude.ai and create a presentation, then click{" "}
+              <span className="font-semibold text-foreground">
+                Open in SlideHuddle
+              </span>
+              .
             </p>
           </div>
         ) : (
-          <ul className="flex flex-col gap-3">
-            {rows.map((deck) => (
-              <li key={deck.id}>
-                <Link
-                  href={`/viewer?id=${deck.id}`}
-                  className="flex items-center justify-between rounded-xl border border-border px-5 py-4 hover:border-brand hover:bg-brand/[0.03] transition-colors"
-                >
-                  <div className="flex flex-col gap-1">
-                    <span className="font-semibold text-foreground">
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {rows.map((deck) => {
+              const slideCount = deck.slide_count;
+              const version = deck.version ?? 1;
+              const metaParts: string[] = [formatDate(deck.created_at)];
+              if (slideCount != null) {
+                metaParts.push(
+                  `${slideCount} slide${slideCount === 1 ? "" : "s"}`,
+                );
+              }
+              if (version > 1) metaParts.push(`v${version}`);
+
+              return (
+                <li key={deck.id}>
+                  <Link
+                    href={`/viewer?id=${deck.id}`}
+                    className="group flex flex-col gap-3 h-full rounded-2xl border border-border p-5 hover:border-brand hover:bg-brand/[0.03] transition-colors"
+                  >
+                    <span className="inline-block h-1.5 w-10 rounded-full bg-brand/30 group-hover:bg-brand transition-colors" />
+                    <span className="font-semibold text-foreground line-clamp-2 min-h-[3rem] leading-tight">
                       {deck.title || "Untitled deck"}
                     </span>
-                    <span className="text-sm text-muted">
-                      {formatDate(deck.created_at)}
-                      {deck.slide_count != null &&
-                        ` · ${deck.slide_count} slide${deck.slide_count === 1 ? "" : "s"}`}
+                    <span className="text-sm text-muted mt-auto">
+                      {metaParts.join(" · ")}
                     </span>
-                  </div>
-                  <span className="text-sm text-brand font-semibold">
-                    Open →
-                  </span>
-                </Link>
-              </li>
-            ))}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

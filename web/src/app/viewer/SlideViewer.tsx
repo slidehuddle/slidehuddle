@@ -318,6 +318,9 @@ export default function SlideViewer({ rawHtml }: Props) {
   // and avoids a hard SSR crash in production.
   const [deck, setDeck] = useState<ParsedDeck>(EMPTY_DECK);
   useEffect(() => {
+    // parseDeck uses DOMParser (browser-only); deferring to useEffect is
+    // the SSR-safe pattern per the comment above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDeck(parseDeck(rawHtml));
   }, [rawHtml]);
   const [index, setIndex] = useState(0);

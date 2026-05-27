@@ -1,5 +1,5 @@
-import Link from "next/link";
 import SlideViewer from "./SlideViewer";
+import ShareBar from "./ShareBar";
 import { SAMPLE_SLIDES_HTML } from "@/lib/sample-slides";
 import { getStoredSlides } from "@/lib/slide-store";
 
@@ -29,16 +29,12 @@ export default async function ViewerPage({
 
   return (
     <main className="flex-1 flex flex-col">
-      <header className="flex items-center justify-between px-8 py-5 border-b border-border">
-        <Link href="/" className="flex items-center gap-2 text-brand font-semibold">
-          <span className="inline-block h-6 w-6 rounded-md bg-brand" />
-          SlideHuddle
-        </Link>
-        {source === "sample" && (
-          <span className="text-xs text-muted">Viewing sample deck</span>
-        )}
-      </header>
-
+      {source === "stored" && <ShareBar />}
+      {source === "sample" && (
+        <div className="px-8 py-2 text-xs text-muted border-b border-border">
+          Viewing sample deck
+        </div>
+      )}
       <SlideViewer rawHtml={html} />
     </main>
   );

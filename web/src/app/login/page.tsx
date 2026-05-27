@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import Link from "next/link";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 
 type Status =
@@ -39,14 +38,6 @@ export default function LoginPage() {
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-6 py-16">
       <div className="w-full max-w-sm flex flex-col gap-8">
-        <Link
-          href="/"
-          className="flex items-center gap-2 text-brand font-semibold self-center"
-        >
-          <span className="inline-block h-7 w-7 rounded-md bg-brand" />
-          SlideHuddle
-        </Link>
-
         {status.kind === "sent" ? (
           <div className="flex flex-col gap-3 text-center">
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
