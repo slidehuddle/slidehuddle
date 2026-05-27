@@ -81,15 +81,28 @@ security boundaries are.
                 │     updated_at    timestamptz                            │
                 │     version       integer                                │
                 │                                                          │
-                │   RLS: enabled                                           │
-                │     anon role      → all denied (no policies granted)   │
-                │     authenticated  → SELECT / INSERT / UPDATE / DELETE  │
-                │                      only rows where                    │
-                │                      auth.uid() = user_id               │
-                │                      (decks_select_own, _insert_own,    │
-                │                       _update_own, _delete_own)         │
-                │     service-role   → full access, bypasses RLS          │
+                │   shared_decks table                                     │
+                │   ──────────────────                                     │
+                │     deck_id       text  → decks(id)        ┐            │
+                │     user_id       uuid  → auth.users(id)   │ PK         │
+                │     role          text  'viewer'|'commenter'            │
+                │     created_at    timestamptz                            │
+                │     (one row = one recipient who has accessed a deck    │
+                │     they don't own, used for "Shared with me")          │
+                │                                                          │
+                │   RLS: enabled on both tables                            │
+                │     decks:                                               │
+                │       anon         → denied                              │
+                │       authenticated→ SELECT if you own the deck OR it's │
+                │                      in your shared_decks               │
+                │                      (decks_select_own_or_shared);      │
+                │                      INSERT / UPDATE / DELETE only      │
+                │                      your own rows                      │
+                │       service-role → full access, bypasses RLS          │
                 │                      (used by API + viewer)             │
+                │     shared_decks:                                        │
+                │       authenticated→ SELECT / INSERT / DELETE only      │
+                │                      rows where auth.uid() = user_id    │
                 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -111,10 +124,10 @@ security boundaries are.
                               ▼
         ┌─────────────── VERCEL ─────────────────────────────────────┐
         │                                                              │
-        │  GET /auth/callback (route handler)                          │
+        │  GET /auth/callback?code=…&next=…                            │
         │   Ⓓ getSupabaseServer().auth.exchangeCodeForSession(code)  │
         │      → sets sb-* auth cookies on the response                │
-        │   Ⓔ 302 redirect → /dashboard                               │
+        │   Ⓔ 302 redirect → next (if relative path) else /dashboard  │
         │                                                              │
         │  GET /dashboard (server component)                           │
         │   Ⓕ server client reads cookies → auth.getUser()            │
@@ -144,7 +157,7 @@ security boundaries are.
 | ⑤ | The extension POSTs the HTML to `slidehuddleapp.vercel.app/api/slides`. Because the page is `claude.ai`, the browser sends `Origin: https://claude.ai` — which the API requires. | Browser → Vercel |
 | ⑥ | The API validates origin, size, and content-type, generates a random ID, does a best-effort session lookup (claude.ai has no SlideHuddle cookie, so `user_id` ends up NULL), derives `title` and `slide_count` from the HTML, and inserts a row using the service-role key (bypasses RLS). | Vercel → Supabase |
 | ⑦ | The API returns `{id, url}` to the extension. | Vercel → Browser |
-| ⑧ | The extension calls `window.open(url)` — a new tab pointing at the viewer. | Browser |
+| ⑧ | The extension calls `window.open(url + "?source=capture")` — a new tab pointing at the viewer with a `source=capture` marker. That marker tells the viewer the person opening the URL is the creator, not a recipient. | Browser |
 | ⑨ | The viewer page runs server-side, reads the deck by ID from Supabase (via the service-role key, so orphan decks work), and renders it. The actual slide HTML goes into an `<iframe sandbox="">` — a locked-down child frame where even malicious JS in the captured HTML can't run. | Vercel + Browser |
 
 ## Step-by-step: signing in and viewing your decks
@@ -157,7 +170,7 @@ security boundaries are.
 | Ⓓ | The callback route swaps the code for a real session by calling `exchangeCodeForSession()`. Supabase writes the access and refresh tokens into HTTP-only `sb-*` cookies. | Vercel |
 | Ⓔ | The route redirects the user to `/dashboard`. The browser carries the new cookies along. | Vercel → Browser |
 | Ⓕ | `/dashboard` runs server-side, reads the cookies via the server Supabase client, and asks Supabase "who is this?" via `auth.getUser()`. If there's no user, it redirects back to `/login`. | Vercel |
-| Ⓖ | It queries `decks` for the current user. Row Level Security guarantees only that user's rows come back. Orphan decks (created from claude.ai without a session) have `user_id = NULL` and so don't appear here — only in the viewer, by direct link. | Vercel → Supabase |
+| Ⓖ | It runs two parallel queries: own decks (`decks` where `user_id = auth.uid()`) and shared decks (a join through `shared_decks`). RLS guarantees only that user's rows come back. Orphan decks (created from claude.ai without a session) have `user_id = NULL` and so don't appear under "My decks" — only in the viewer by direct link. | Vercel → Supabase |
 
 Sign-out: the dashboard's "Sign out" button POSTs to `/auth/signout`, which
 calls `auth.signOut()` (clearing the cookies) and redirects back to `/login`.
@@ -198,6 +211,60 @@ up. Users who later create an account get a dashboard of their *future*
 captures; older orphan decks remain reachable only by their direct viewer
 link.
 
+## Creators vs recipients: who sees what in the viewer
+
+A viewer URL like `/viewer?id=ABC123` can be opened by two very different
+people. We distinguish them by a single query-string marker:
+
+- **Creator** — the URL has `?source=capture` (the extension always adds
+  this when it opens the deck for the first time). This is the person who
+  just captured the slides.
+- **Recipient** — the URL has no `source` parameter. This is anyone who
+  received the link from someone else.
+
+When the viewer page renders for a stored deck, it picks one of four
+behaviours based on `source=capture` and whether the user is signed in:
+
+| State | What the viewer does |
+|---|---|
+| Creator, signed in, deck is orphan (`user_id` is NULL) | Quietly **claims** the deck — sets `user_id = current user`. The deck now appears in their "My decks" on the dashboard. |
+| Creator, signed out | Shows a banner: **"Sign in to save this deck to your dashboard."** The Sign-in button carries a `?next=` back to the same viewer URL, so the claim happens automatically once they finish signing in. |
+| Recipient, signed in, doesn't own the deck | Quietly **records** a row in `shared_decks` (idempotent — repeat visits don't add duplicates). The deck now appears under "Shared with me" on their dashboard. |
+| Recipient, signed out | Shows a banner: **"Sign in to comment and collaborate."** The Sign-in button carries `?next=` back to the viewer; after signing in, the recipient flow kicks in. |
+
+A few extra rules to make this safe and sane:
+
+- **The "Copy link" button strips `?source=capture` before copying.** That
+  means a recipient who receives a link can never accidentally trigger the
+  creator claim flow.
+- **Claim only succeeds on orphan decks.** The `claimOrphanDeck` helper
+  updates `user_id` only when it's currently NULL — so if a creator is
+  slow to sign in and the URL leaks, the claim can't take a deck away
+  from someone who already owns it.
+- **Recipients aren't tracked on decks they own.** A user visiting their
+  own deck via a no-source URL doesn't get added to `shared_decks`.
+- **Orphan decks are never tracked.** If a signed-in user visits an orphan
+  deck through a no-source URL (e.g. they used an older extension build
+  that didn't add `?source=capture`), we don't insert a `shared_decks`
+  row — nobody really "shared" a deck with no owner. The deck stays
+  reachable only by direct link.
+
+## The `?next=` redirect for "sign in and come back"
+
+When a viewer-page banner sends an unsigned-in user to `/login`, it tags
+the URL with `?next=/viewer?id=…&source=capture` (or the same without
+`source` for recipients). That parameter flows through three places:
+
+1. `/login` reads it from `window.location.search` and tacks it onto the
+   `emailRedirectTo` passed into `signInWithOtp()`.
+2. The magic-link email lands at `/auth/callback?code=…&next=…`.
+3. `/auth/callback` finishes the auth exchange and 302-redirects to
+   `next` instead of the default `/dashboard`.
+
+The callback only honours a `next` value that starts with a single `/` —
+absolute URLs and protocol-relative `//evil.com` are dropped. That blocks
+an open-redirect attack via a crafted magic-link URL.
+
 ## Security boundaries
 
 | Boundary | What it stops |
@@ -206,7 +273,10 @@ link.
 | API origin allowlist | A malicious website can't POST junk decks to the API even if a visitor lands there. |
 | API size & content-type checks | Can't flood Supabase with megabytes of garbage per request. |
 | Crypto-random deck IDs | Can't enumerate or guess other users' deck URLs. |
-| Supabase RLS — `decks_*_own` policies | Even with the public anon key, a signed-in user can only `SELECT/INSERT/UPDATE/DELETE` rows where `auth.uid() = user_id`. The anon (logged-out) role has no policies and therefore can't read anything directly. |
+| Supabase RLS — `decks_*` policies | Even with the public anon key, a signed-in user can only `INSERT/UPDATE/DELETE` rows where `auth.uid() = user_id`. `SELECT` allows their own decks *or* decks linked to them via `shared_decks` (the `decks_select_own_or_shared` policy). The anon (logged-out) role has no policies and therefore can't read anything directly. |
+| Supabase RLS — `shared_decks_*_own` policies | Users can only read, insert, or remove their own `shared_decks` rows — they can't snoop on who else has accessed a given deck. |
+| Open-redirect protection on `?next=` | `/auth/callback` only honours `next` values that start with a single `/`. Absolute URLs and protocol-relative paths are dropped, so a crafted magic link can't bounce a user to a phishing site after sign-in. |
+| Claim-only-on-orphan guard | `claimOrphanDeck` updates `user_id` only when it's currently NULL, so a leaked `?source=capture` URL can't take a deck away from someone who already owns it. |
 | Service-role key on the server only | The only way to bypass RLS is the service-role key, which lives in Vercel's env vars and is never sent to the browser. |
 | HTTP-only session cookies | The `sb-*` auth cookies aren't readable from JavaScript, so an XSS bug on a SlideHuddle page can't steal the session. |
 | Magic-link sign-in | No passwords stored anywhere on our side. The link is one-time and short-lived, and the only way to receive it is to control the email inbox. |
@@ -221,16 +291,19 @@ link.
 | [content.js](../content.js) | The extension script that runs on Claude pages |
 | [popup.html](../popup.html) | The small info popup when the extension icon is clicked |
 | [web/src/app/api/slides/route.ts](../web/src/app/api/slides/route.ts) | The POST endpoint that stores captured decks. Does a best-effort session lookup to attach `user_id`. |
-| [web/src/lib/slide-store.ts](../web/src/lib/slide-store.ts) | Supabase wrapper for storing/fetching decks. Derives `title` and `slide_count` from the HTML on insert. |
+| [web/src/lib/slide-store.ts](../web/src/lib/slide-store.ts) | Supabase wrapper for storing/fetching decks. Derives `title` and `slide_count` from the HTML on insert. Also exposes `claimOrphanDeck` (sets `user_id` on an unclaimed deck) and `trackSharedDeck` (upserts a `shared_decks` row for recipient flows). |
 | [web/src/lib/supabase.ts](../web/src/lib/supabase.ts) | Lazy-initialised service-role (admin) Supabase client — bypasses RLS, server-only |
 | [web/src/lib/supabase-server.ts](../web/src/lib/supabase-server.ts) | Per-request anon-key Supabase client wired to the request's cookies — used for any "who is signed in?" check |
 | [web/src/lib/supabase-browser.ts](../web/src/lib/supabase-browser.ts) | Browser anon-key Supabase client — used by the login form to trigger the magic-link email |
 | [web/src/proxy.ts](../web/src/proxy.ts) | Next.js 16 proxy (formerly middleware). Runs on every non-asset request and lets `@supabase/ssr` rotate the auth cookie when it's close to expiring. |
-| [web/src/app/login/page.tsx](../web/src/app/login/page.tsx) | The magic-link sign-in form |
-| [web/src/app/auth/callback/route.ts](../web/src/app/auth/callback/route.ts) | Magic-link landing route — swaps the one-time code for a session and redirects to `/dashboard` |
+| [web/src/app/login/page.tsx](../web/src/app/login/page.tsx) | The magic-link sign-in form. Forwards any `?next=…` query string through to the auth callback so users return to where they started after signing in. |
+| [web/src/app/auth/callback/route.ts](../web/src/app/auth/callback/route.ts) | Magic-link landing route — swaps the one-time code for a session and redirects to `next` (defaults to `/dashboard`). Only relative paths are honoured to prevent open-redirects. |
 | [web/src/app/auth/signout/route.ts](../web/src/app/auth/signout/route.ts) | Sign-out endpoint — clears the session cookies and redirects to `/login` |
-| [web/src/app/dashboard/page.tsx](../web/src/app/dashboard/page.tsx) | "Your decks" page — server-renders the signed-in user's deck list |
-| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too) |
+| [web/src/app/dashboard/page.tsx](../web/src/app/dashboard/page.tsx) | "Your decks" page — server-renders two sections: "My decks" (owned) and "Shared with me" (joined via `shared_decks`). |
+| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too). Also runs the creator-claim or recipient-track side-effect and decides which sign-in banner (if any) to show. |
 | [web/src/app/viewer/SlideViewer.tsx](../web/src/app/viewer/SlideViewer.tsx) | The React component that parses and renders slides |
+| [web/src/app/viewer/ShareBar.tsx](../web/src/app/viewer/ShareBar.tsx) | "Copy link" share bar at the top of stored-deck viewer pages. Strips `?source=capture` before copying. |
+| [web/src/app/viewer/SignInBanner.tsx](../web/src/app/viewer/SignInBanner.tsx) | Banner shown above the viewer to signed-out users — different copy for creators vs recipients, with a "Sign in" link that carries `?next=` back to the viewer. |
 | [web/next.config.ts](../web/next.config.ts) | Web app config — security headers live here |
 | [docs/auth-migration.sql](./auth-migration.sql) | One-shot SQL for the new `user_id`/`title`/`slide_count` columns and the `decks_*_own` RLS policies. Idempotent — safe to re-run. |
+| [docs/shared-decks-migration.sql](./shared-decks-migration.sql) | One-shot SQL for the `shared_decks` table, its RLS policies, and the widened `decks_select_own_or_shared` policy. Idempotent — safe to re-run. |
