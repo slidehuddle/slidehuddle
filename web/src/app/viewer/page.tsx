@@ -4,9 +4,11 @@ import SignInBanner from "./SignInBanner";
 import { SAMPLE_SLIDES_HTML } from "@/lib/sample-slides";
 import {
   claimOrphanDeck,
+  getCommentsForDeck,
   getDeckMeta,
   getStoredSlides,
   trackSharedDeck,
+  type CommentRow,
 } from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
@@ -41,6 +43,9 @@ export default async function ViewerPage({
   // - signed-in recipient (not owner) → record in shared_decks
   // - signed-out → show the appropriate sign-in banner
   let bannerVariant: "creator" | "recipient" | null = null;
+  let currentUserId: string | null = null;
+  let currentUserEmail: string | null = null;
+  let initialComments: CommentRow[] = [];
 
   if (source === "stored" && id) {
     const supabase = await getSupabaseServer();
@@ -60,6 +65,11 @@ export default async function ViewerPage({
         // they shouldn't show up under "Shared with me".
         await trackSharedDeck(id, user.id);
       }
+      currentUserId = user.id;
+      currentUserEmail = user.email ?? null;
+      // Load comments after any claim/track has settled, so the user has
+      // access to the deck under the comments RLS.
+      initialComments = await getCommentsForDeck(id, user.id);
     } else if (!user) {
       bannerVariant = isCaptureSource ? "creator" : "recipient";
     }
@@ -76,7 +86,13 @@ export default async function ViewerPage({
           Viewing sample deck
         </div>
       )}
-      <SlideViewer rawHtml={html} />
+      <SlideViewer
+        rawHtml={html}
+        deckId={source === "stored" ? id ?? null : null}
+        initialComments={initialComments}
+        currentUserId={currentUserId}
+        currentUserEmail={currentUserEmail}
+      />
     </main>
   );
 }

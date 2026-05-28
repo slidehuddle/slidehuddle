@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import CommentsPanel from "./CommentsPanel";
+import type { CommentRow } from "@/lib/slide-store";
 
 // Default canvas if we can't detect the deck's authored dimensions.
 // 1280×720 is the most common slide canvas size. We tried 960×540 to make
@@ -13,6 +15,10 @@ const DEFAULT_SLIDE_H = 720;
 
 type Props = {
   rawHtml: string;
+  deckId: string | null;
+  initialComments: CommentRow[];
+  currentUserId: string | null;
+  currentUserEmail: string | null;
 };
 
 type ParsedDeck = {
@@ -311,7 +317,13 @@ const EMPTY_DECK: ParsedDeck = {
   slideHeight: DEFAULT_SLIDE_H,
 };
 
-export default function SlideViewer({ rawHtml }: Props) {
+export default function SlideViewer({
+  rawHtml,
+  deckId,
+  initialComments,
+  currentUserId,
+  currentUserEmail,
+}: Props) {
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
   // initial render empty so SSR is safe, then parse on the client after
   // mount. There's a brief frame where the viewer is empty — fine in dev,
@@ -324,6 +336,11 @@ export default function SlideViewer({ rawHtml }: Props) {
     setDeck(parseDeck(rawHtml));
   }, [rawHtml]);
   const [index, setIndex] = useState(0);
+
+  // Comments state owned here because the panel renders alongside slides
+  // and the off-slide-count badge is tied to the current slide index.
+  const [comments, setComments] = useState<CommentRow[]>(initialComments);
+  const [commentsOpen, setCommentsOpen] = useState(false);
 
   const hasSlides = deck.slides.length > 0;
   const safeIndex = Math.min(index, Math.max(0, deck.slides.length - 1));
@@ -373,6 +390,73 @@ export default function SlideViewer({ rawHtml }: Props) {
     // Re-run when slide count or detected dimensions change.
   }, [deck.slides.length, deck.slideWidth, deck.slideHeight]);
 
+  // Per-slide and aggregate counts derived from the comments array.
+  const commentsBySlide = useMemo(() => {
+    const m = new Map<number, CommentRow[]>();
+    for (const c of comments) {
+      const list = m.get(c.slide_index);
+      if (list) list.push(c);
+      else m.set(c.slide_index, [c]);
+    }
+    return m;
+  }, [comments]);
+  const otherSlideCommentCount = useMemo(() => {
+    let n = 0;
+    for (const [slide, list] of commentsBySlide.entries()) {
+      if (slide !== safeIndex) n += list.length;
+    }
+    return n;
+  }, [commentsBySlide, safeIndex]);
+  const canComment = !!(deckId && currentUserId);
+
+  async function handleAddComment(body: string) {
+    if (!deckId || !currentUserId) return;
+    const optimisticId = `temp-${Date.now()}`;
+    const optimistic: CommentRow = {
+      id: optimisticId,
+      deck_id: deckId,
+      user_id: currentUserId,
+      author_email: currentUserEmail,
+      slide_index: safeIndex,
+      body,
+      created_at: new Date().toISOString(),
+    };
+    setComments((prev) => [...prev, optimistic]);
+    const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+    const supabase = getSupabaseBrowser();
+    const { data, error } = await supabase
+      .from("comments")
+      .insert({
+        deck_id: deckId,
+        user_id: currentUserId,
+        author_email: currentUserEmail,
+        slide_index: safeIndex,
+        body,
+      })
+      .select("id, deck_id, user_id, author_email, slide_index, body, created_at")
+      .single();
+    if (error) {
+      console.error("[SlideViewer] comment insert failed:", error);
+      setComments((prev) => prev.filter((c) => c.id !== optimisticId));
+      return;
+    }
+    setComments((prev) =>
+      prev.map((c) => (c.id === optimisticId ? (data as CommentRow) : c)),
+    );
+  }
+
+  async function handleDeleteComment(id: string) {
+    const snapshot = comments;
+    setComments((prev) => prev.filter((c) => c.id !== id));
+    const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+    const supabase = getSupabaseBrowser();
+    const { error } = await supabase.from("comments").delete().eq("id", id);
+    if (error) {
+      console.error("[SlideViewer] comment delete failed:", error);
+      setComments(snapshot);
+    }
+  }
+
   if (!hasSlides) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted">
@@ -382,62 +466,110 @@ export default function SlideViewer({ rawHtml }: Props) {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 gap-6">
-      {/*
-        Scale-to-fit slide rendering. The iframe renders at the deck's
-        detected natural canvas (or 1280×720 default), and the card's
-        aspect ratio is matched to those dimensions — so no letterboxing.
-        We then visually scale the iframe down via CSS transform to fit.
-      */}
-      <div
-        ref={cardRef}
-        className="w-[80%] bg-white rounded-2xl shadow-[0_8px_40px_rgba(74,63,181,0.08)] border border-border overflow-hidden flex items-center justify-center"
-        style={{ aspectRatio: `${deck.slideWidth} / ${deck.slideHeight}` }}
-      >
-        <iframe
-          key={safeIndex}
-          title={`Slide ${safeIndex + 1}`}
-          srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
-          sandbox=""
-          className="border-0 block bg-white shrink-0"
-          style={{
-            width: `${deck.slideWidth}px`,
-            height: `${deck.slideHeight}px`,
-            transformOrigin: "center center",
-            transform: `scale(${scale})`,
-          }}
+    <div className="flex-1 flex flex-row min-h-0">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 gap-6 min-w-0">
+        {/*
+          Scale-to-fit slide rendering. The iframe renders at the deck's
+          detected natural canvas (or 1280×720 default), and the card's
+          aspect ratio is matched to those dimensions — so no letterboxing.
+          We then visually scale the iframe down via CSS transform to fit.
+        */}
+        <div
+          ref={cardRef}
+          className="w-[80%] bg-white rounded-2xl shadow-[0_8px_40px_rgba(74,63,181,0.08)] border border-border overflow-hidden flex items-center justify-center"
+          style={{ aspectRatio: `${deck.slideWidth} / ${deck.slideHeight}` }}
+        >
+          <iframe
+            key={safeIndex}
+            title={`Slide ${safeIndex + 1}`}
+            srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
+            sandbox=""
+            className="border-0 block bg-white shrink-0"
+            style={{
+              width: `${deck.slideWidth}px`,
+              height: `${deck.slideHeight}px`,
+              transformOrigin: "center center",
+              transform: `scale(${scale})`,
+            }}
+          />
+        </div>
+
+        <div className="flex items-center gap-6">
+          <button
+            type="button"
+            onClick={goPrev}
+            disabled={safeIndex === 0}
+            aria-label="Previous slide"
+            className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-brand hover:bg-brand hover:text-white disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-brand transition-colors"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+
+          <span className="text-sm text-muted tabular-nums min-w-[3rem] text-center">
+            {safeIndex + 1} / {deck.slides.length}
+            {otherSlideCommentCount > 0 && (
+              <span
+                className="ml-2 text-brand"
+                aria-label={`${otherSlideCommentCount} comment${otherSlideCommentCount === 1 ? "" : "s"} on other slides`}
+              >
+                · {otherSlideCommentCount}
+              </span>
+            )}
+          </span>
+
+          <button
+            type="button"
+            onClick={goNext}
+            disabled={safeIndex === deck.slides.length - 1}
+            aria-label="Next slide"
+            className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-brand hover:bg-brand hover:text-white disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-brand transition-colors"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+
+          {canComment && (
+            <button
+              type="button"
+              onClick={() => setCommentsOpen((v) => !v)}
+              aria-pressed={commentsOpen}
+              className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:border-brand hover:text-brand transition-colors"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              Comments
+              {comments.length > 0 && (
+                <span className="text-muted">({comments.length})</span>
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {commentsOpen && canComment && deckId && currentUserId && (
+        <CommentsPanel
+          currentSlideIndex={safeIndex}
+          comments={comments}
+          currentUserId={currentUserId}
+          onAdd={handleAddComment}
+          onDelete={handleDeleteComment}
+          onClose={() => setCommentsOpen(false)}
         />
-      </div>
-
-      <div className="flex items-center gap-6">
-        <button
-          type="button"
-          onClick={goPrev}
-          disabled={safeIndex === 0}
-          aria-label="Previous slide"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-brand hover:bg-brand hover:text-white disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-brand transition-colors"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-        </button>
-
-        <span className="text-sm text-muted tabular-nums min-w-[3rem] text-center">
-          {safeIndex + 1} / {deck.slides.length}
-        </span>
-
-        <button
-          type="button"
-          onClick={goNext}
-          disabled={safeIndex === deck.slides.length - 1}
-          aria-label="Next slide"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-brand hover:bg-brand hover:text-white disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-brand transition-colors"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-        </button>
-      </div>
+      )}
     </div>
   );
 }

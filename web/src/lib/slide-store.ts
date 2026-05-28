@@ -229,6 +229,59 @@ export async function recomputeOwnedDeckMeta(userId: string): Promise<{
   return { scanned: data.length, updated };
 }
 
+export type CommentRow = {
+  id: string;
+  deck_id: string;
+  user_id: string;
+  author_email: string | null;
+  slide_index: number;
+  body: string;
+  created_at: string;
+};
+
+// Fetch every comment the signed-in user can see for a deck, ordered by
+// slide and then by time. Uses the admin client because we need to read
+// all comments on accessible decks regardless of RLS strictness — the
+// caller is expected to have already verified deck access for the user
+// (or we pass userId NULL for an anonymous viewer and return []).
+export async function getCommentsForDeck(
+  deckId: string,
+  userId: string | null,
+): Promise<CommentRow[]> {
+  if (!userId) return [];
+  const supabase = getSupabaseAdmin();
+  // Double-check access: own the deck OR have a shared_decks row. This
+  // mirrors the comments RLS but is enforced explicitly here because we're
+  // using the admin client (which bypasses RLS).
+  const [{ data: ownsDeck }, { data: hasShare }] = await Promise.all([
+    supabase
+      .from("decks")
+      .select("id")
+      .eq("id", deckId)
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("shared_decks")
+      .select("deck_id")
+      .eq("deck_id", deckId)
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
+  if (!ownsDeck && !hasShare) return [];
+
+  const { data, error } = await supabase
+    .from("comments")
+    .select("id, deck_id, user_id, author_email, slide_index, body, created_at")
+    .eq("deck_id", deckId)
+    .order("slide_index", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[slide-store] comments fetch failed:", error);
+    return [];
+  }
+  return (data ?? []) as CommentRow[];
+}
+
 // Look up auth.users.email for a set of user ids using the admin API.
 // The anon-key Supabase client can't read auth.users, so this has to use
 // service-role. Returns a {user_id → email} map; missing entries mean
