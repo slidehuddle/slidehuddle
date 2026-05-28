@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseServer } from "@/lib/supabase-server";
+import { getDeckShareCounts, getOwnerEmails } from "@/lib/slide-store";
 
 type DeckRow = {
   id: string;
@@ -8,6 +9,7 @@ type DeckRow = {
   created_at: string;
   slide_count: number | null;
   version: number | null;
+  user_id: string | null;
 };
 
 type SharedDeckRow = {
@@ -40,10 +42,14 @@ function DeckCard({
   deck,
   meta,
   accent,
+  ownerEmail,
+  shareCount,
 }: {
   deck: DeckRow;
   meta: string;
   accent: "brand" | "muted";
+  ownerEmail?: string;
+  shareCount?: number;
 }) {
   const accentBase = accent === "brand" ? "bg-brand/30" : "bg-muted/30";
   const accentHover =
@@ -60,7 +66,20 @@ function DeckCard({
         <span className="font-semibold text-foreground line-clamp-2 min-h-[3rem] leading-tight">
           {deck.title || "Untitled deck"}
         </span>
-        <span className="text-sm text-muted mt-auto">{meta}</span>
+        <div className="mt-auto flex flex-col gap-1">
+          <span className="text-sm text-muted">{meta}</span>
+          {ownerEmail && (
+            <span className="text-xs text-muted">
+              from{" "}
+              <span className="text-foreground font-medium">{ownerEmail}</span>
+            </span>
+          )}
+          {shareCount != null && shareCount > 0 && (
+            <span className="text-xs text-muted">
+              Shared with {shareCount} {shareCount === 1 ? "person" : "people"}
+            </span>
+          )}
+        </div>
       </Link>
     </li>
   );
@@ -82,13 +101,13 @@ export default async function DashboardPage() {
   const [ownDecksResult, sharedDecksResult] = await Promise.all([
     supabase
       .from("decks")
-      .select("id, title, created_at, slide_count, version")
+      .select("id, title, created_at, slide_count, version, user_id")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false }),
     supabase
       .from("shared_decks")
       .select(
-        "created_at, deck:decks(id, title, created_at, slide_count, version)",
+        "created_at, deck:decks(id, title, created_at, slide_count, version, user_id)",
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false }),
@@ -108,12 +127,25 @@ export default async function DashboardPage() {
   }
 
   const ownDecks: DeckRow[] = ownDecksResult.data ?? [];
-  // Supabase types the embedded `deck` as an array when the relationship
-  // can't be inferred as single-row; we know each shared_decks row points
-  // to one deck, so we coerce. Filter out any null deck (defensive).
   const sharedRows: SharedDeckRow[] = (
     (sharedDecksResult.data ?? []) as unknown as SharedDeckRow[]
   ).filter((r) => r.deck != null);
+
+  // Fetch the extras shown on cards: share counts across both sections,
+  // plus owner emails for the "Shared with me" section. Done with the
+  // admin client because RLS would otherwise hide other recipients' rows
+  // and block reading auth.users.
+  const ownerIdsForShared = sharedRows
+    .map((r) => r.deck?.user_id)
+    .filter((id): id is string => !!id);
+  const allDeckIds = [
+    ...ownDecks.map((d) => d.id),
+    ...sharedRows.map((r) => r.deck!.id),
+  ];
+  const [shareCountByDeck, emailByOwnerId] = await Promise.all([
+    getDeckShareCounts(allDeckIds),
+    getOwnerEmails(ownerIdsForShared),
+  ]);
 
   const bothEmpty = ownDecks.length === 0 && sharedRows.length === 0;
 
@@ -157,6 +189,7 @@ export default async function DashboardPage() {
                       deck={deck}
                       meta={deckMeta(deck)}
                       accent="brand"
+                      shareCount={shareCountByDeck[deck.id] ?? 0}
                     />
                   ))}
                 </ul>
@@ -171,6 +204,9 @@ export default async function DashboardPage() {
                 <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {sharedRows.map((row) => {
                     const deck = row.deck!;
+                    const ownerEmail = deck.user_id
+                      ? emailByOwnerId[deck.user_id]
+                      : undefined;
                     return (
                       <DeckCard
                         key={deck.id}
@@ -179,6 +215,8 @@ export default async function DashboardPage() {
                         // not when the deck was originally created.
                         meta={deckMeta(deck, row.created_at)}
                         accent="muted"
+                        ownerEmail={ownerEmail}
+                        shareCount={shareCountByDeck[deck.id] ?? 0}
                       />
                     );
                   })}

@@ -39,13 +39,24 @@ function extractTitle(html: string): string | null {
 }
 
 function countSlides(html: string): number | null {
-  // Match the same shapes Claude tends to emit. We pick the higher count
-  // so that whichever convention the deck uses, we get a sensible number.
+  // Mirror SlideViewer's strategy priority: prefer .slide elements; fall
+  // back to bare <section> only when there are no .slide elements at all.
+  // (Claude decks frequently include non-slide <section>s for navigation,
+  // headers, etc., so Math.max() would over-count.)
+  //
+  // We also match "slide" as an exact class token, not via \bslide\b, so
+  // we don't pick up class="slide-number", class="slide-title", etc.
+  const classAttrs = html.match(/class\s*=\s*"([^"]*)"/gi) || [];
+  let slideClassCount = 0;
+  for (const attr of classAttrs) {
+    const inner = attr.match(/"([^"]*)"/)?.[1] ?? "";
+    const tokens = inner.split(/\s+/);
+    if (tokens.includes("slide")) slideClassCount++;
+  }
+  if (slideClassCount > 0) return slideClassCount;
+
   const sectionCount = (html.match(/<section\b/gi) || []).length;
-  const slideDivCount = (html.match(/class\s*=\s*"[^"]*\bslide\b[^"]*"/gi) || [])
-    .length;
-  const count = Math.max(sectionCount, slideDivCount);
-  return count > 0 ? count : null;
+  return sectionCount > 0 ? sectionCount : null;
 }
 
 export type StoreSlidesOptions = {
@@ -143,4 +154,107 @@ export async function trackSharedDeck(
   if (error) {
     console.error("[slide-store] track-share failed:", error);
   }
+}
+
+// Count how many shared_decks rows exist per deck, keyed by deck_id.
+// Uses the admin client because RLS on shared_decks restricts a signed-in
+// user to their own rows — but the dashboard wants the aggregate count
+// across all recipients of each deck.
+export async function getDeckShareCounts(
+  deckIds: string[],
+): Promise<Record<string, number>> {
+  if (deckIds.length === 0) return {};
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("shared_decks")
+    .select("deck_id")
+    .in("deck_id", deckIds);
+  if (error) {
+    console.error("[slide-store] share counts fetch failed:", error);
+    return {};
+  }
+  const counts: Record<string, number> = {};
+  for (const row of (data ?? []) as { deck_id: string }[]) {
+    counts[row.deck_id] = (counts[row.deck_id] ?? 0) + 1;
+  }
+  return counts;
+}
+
+// Re-derive title and slide_count for every deck owned by `userId` and
+// write back any rows where the freshly-computed values differ from what
+// was stored. Useful as a one-off backfill when the derivation logic
+// changes (e.g. the slide_count counting fix). Idempotent — running it
+// again on an already-correct dataset is a no-op.
+export async function recomputeOwnedDeckMeta(userId: string): Promise<{
+  scanned: number;
+  updated: number;
+}> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("decks")
+    .select("id, html_content, title, slide_count")
+    .eq("user_id", userId);
+  if (error || !data) {
+    console.error("[slide-store] recount fetch failed:", error);
+    return { scanned: 0, updated: 0 };
+  }
+  let updated = 0;
+  await Promise.all(
+    (data as { id: string; html_content: string; title: string | null; slide_count: number | null }[]).map(
+      async (deck) => {
+        const newTitle = extractTitle(deck.html_content);
+        const newSlideCount = countSlides(deck.html_content);
+        if (
+          newTitle === deck.title &&
+          newSlideCount === deck.slide_count
+        ) {
+          return;
+        }
+        const { error: updateErr } = await supabase
+          .from("decks")
+          .update({ title: newTitle, slide_count: newSlideCount })
+          .eq("id", deck.id);
+        if (updateErr) {
+          console.error(
+            "[slide-store] recount update failed for",
+            deck.id,
+            updateErr,
+          );
+          return;
+        }
+        updated++;
+      },
+    ),
+  );
+  return { scanned: data.length, updated };
+}
+
+// Look up auth.users.email for a set of user ids using the admin API.
+// The anon-key Supabase client can't read auth.users, so this has to use
+// service-role. Returns a {user_id → email} map; missing entries mean
+// either the user no longer exists or has no email recorded.
+export async function getOwnerEmails(
+  userIds: string[],
+): Promise<Record<string, string>> {
+  if (userIds.length === 0) return {};
+  const supabase = getSupabaseAdmin();
+  const unique = Array.from(new Set(userIds));
+  const result: Record<string, string> = {};
+  await Promise.all(
+    unique.map(async (uid) => {
+      const { data, error } = await supabase.auth.admin.getUserById(uid);
+      if (error) {
+        console.warn(
+          "[slide-store] owner email lookup failed for",
+          uid,
+          error,
+        );
+        return;
+      }
+      if (data.user?.email) {
+        result[uid] = data.user.email;
+      }
+    }),
+  );
+  return result;
 }
