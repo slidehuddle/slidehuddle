@@ -7,6 +7,7 @@ import {
   getCommentsForDeck,
   getDeckMeta,
   getStoredSlides,
+  recordDeckView,
   trackSharedDeck,
   type CommentRow,
 } from "@/lib/slide-store";
@@ -70,13 +71,17 @@ export default async function ViewerPage({
       // Load comments after any claim/track has settled, so the user has
       // access to the deck under the comments RLS.
       initialComments = await getCommentsForDeck(id, user.id);
+      // Record this view so unread counts on the dashboard advance past
+      // any comments they're seeing right now. Fire-and-forget; if it
+      // fails the worst case is "unread" stays stale until next view.
+      await recordDeckView(id, user.id);
     } else if (!user) {
       bannerVariant = isCaptureSource ? "creator" : "recipient";
     }
   }
 
   return (
-    <main className="flex-1 flex flex-col">
+    <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {bannerVariant && id && (
         <SignInBanner variant={bannerVariant} deckId={id} />
       )}

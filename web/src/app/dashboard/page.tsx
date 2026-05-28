@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { getDeckShareCounts, getOwnerEmails } from "@/lib/slide-store";
+import {
+  getDeckCommentCountsForUser,
+  getDeckShareCounts,
+  getOwnerEmails,
+} from "@/lib/slide-store";
 
 type DeckRow = {
   id: string;
@@ -44,12 +48,16 @@ function DeckCard({
   accent,
   ownerEmail,
   shareCount,
+  commentTotal,
+  commentUnread,
 }: {
   deck: DeckRow;
   meta: string;
   accent: "brand" | "muted";
   ownerEmail?: string;
   shareCount?: number;
+  commentTotal?: number;
+  commentUnread?: number;
 }) {
   const accentBase = accent === "brand" ? "bg-brand/30" : "bg-muted/30";
   const accentHover =
@@ -77,6 +85,33 @@ function DeckCard({
           {shareCount != null && shareCount > 0 && (
             <span className="text-xs text-muted">
               Shared with {shareCount} {shareCount === 1 ? "person" : "people"}
+            </span>
+          )}
+          {commentTotal != null && commentTotal > 0 && (
+            <span className="text-xs text-muted flex items-center gap-1.5">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              {commentTotal} {commentTotal === 1 ? "comment" : "comments"}
+              {commentUnread != null && commentUnread > 0 && (
+                <span className="inline-flex items-center gap-1 text-red-600 font-semibold">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 rounded-full bg-red-600"
+                  />
+                  {commentUnread} new
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -142,10 +177,12 @@ export default async function DashboardPage() {
     ...ownDecks.map((d) => d.id),
     ...sharedRows.map((r) => r.deck!.id),
   ];
-  const [shareCountByDeck, emailByOwnerId] = await Promise.all([
-    getDeckShareCounts(allDeckIds),
-    getOwnerEmails(ownerIdsForShared),
-  ]);
+  const [shareCountByDeck, emailByOwnerId, commentCountsByDeck] =
+    await Promise.all([
+      getDeckShareCounts(allDeckIds),
+      getOwnerEmails(ownerIdsForShared),
+      getDeckCommentCountsForUser(allDeckIds, user.id),
+    ]);
 
   const bothEmpty = ownDecks.length === 0 && sharedRows.length === 0;
 
@@ -183,15 +220,20 @@ export default async function DashboardPage() {
                   My decks
                 </h2>
                 <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {ownDecks.map((deck) => (
-                    <DeckCard
-                      key={deck.id}
-                      deck={deck}
-                      meta={deckMeta(deck)}
-                      accent="brand"
-                      shareCount={shareCountByDeck[deck.id] ?? 0}
-                    />
-                  ))}
+                  {ownDecks.map((deck) => {
+                    const cc = commentCountsByDeck[deck.id];
+                    return (
+                      <DeckCard
+                        key={deck.id}
+                        deck={deck}
+                        meta={deckMeta(deck)}
+                        accent="brand"
+                        shareCount={shareCountByDeck[deck.id] ?? 0}
+                        commentTotal={cc?.total ?? 0}
+                        commentUnread={cc?.unread ?? 0}
+                      />
+                    );
+                  })}
                 </ul>
               </section>
             )}
@@ -207,6 +249,7 @@ export default async function DashboardPage() {
                     const ownerEmail = deck.user_id
                       ? emailByOwnerId[deck.user_id]
                       : undefined;
+                    const cc = commentCountsByDeck[deck.id];
                     return (
                       <DeckCard
                         key={deck.id}
@@ -217,6 +260,8 @@ export default async function DashboardPage() {
                         accent="muted"
                         ownerEmail={ownerEmail}
                         shareCount={shareCountByDeck[deck.id] ?? 0}
+                        commentTotal={cc?.total ?? 0}
+                        commentUnread={cc?.unread ?? 0}
                       />
                     );
                   })}

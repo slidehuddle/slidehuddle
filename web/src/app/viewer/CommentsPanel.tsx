@@ -1,7 +1,42 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CommentRow } from "@/lib/slide-store";
+
+function CommentBody({ body }: { body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+
+  // Measure on mount and whenever the body content changes — if the
+  // line-clamped paragraph is taller than what it actually shows, the
+  // comment is truncated and we need the More toggle.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setTruncated(el.scrollHeight > el.clientHeight + 1);
+  }, [body]);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p
+        ref={ref}
+        className={`text-sm text-foreground whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-5"}`}
+      >
+        {body}
+      </p>
+      {truncated && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="self-start text-xs font-semibold text-brand hover:text-brand-hover transition-colors"
+        >
+          {expanded ? "Less" : "More"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 type Props = {
   currentSlideIndex: number;
@@ -94,9 +129,7 @@ export default function CommentsPanel({
                   {formatTime(c.created_at)}
                 </time>
               </div>
-              <p className="text-sm text-foreground whitespace-pre-wrap">
-                {c.body}
-              </p>
+              <CommentBody body={c.body} />
               {c.user_id === currentUserId && (
                 <button
                   type="button"

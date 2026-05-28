@@ -229,6 +229,89 @@ export async function recomputeOwnedDeckMeta(userId: string): Promise<{
   return { scanned: data.length, updated };
 }
 
+// Upsert the (deck_id, user_id) row in deck_views with the current
+// timestamp. Used by the viewer page to record "this user has now seen
+// the deck up to this point" so the dashboard can compute unread
+// comment counts.
+export async function recordDeckView(
+  deckId: string,
+  userId: string,
+): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("deck_views")
+    .upsert(
+      {
+        deck_id: deckId,
+        user_id: userId,
+        last_viewed_at: new Date().toISOString(),
+      },
+      { onConflict: "deck_id,user_id" },
+    );
+  if (error) {
+    console.error("[slide-store] record-view failed:", error);
+  }
+}
+
+// Total / unread comment counts per deck for the dashboard. "Unread"
+// means a comment whose created_at is newer than the user's
+// deck_views.last_viewed_at (or any comment, if the user has never
+// viewed the deck). Uses the admin client because:
+//   - the comments RLS would only return rows on decks the user can
+//     access via select_on_accessible_decks, which is what we want, but
+//   - we also want to count comments by *other* users, and a single
+//     admin query over both deck_views and comments is simpler and
+//     cheaper than two RLS-scoped queries.
+export async function getDeckCommentCountsForUser(
+  deckIds: string[],
+  userId: string,
+): Promise<Record<string, { total: number; unread: number }>> {
+  if (deckIds.length === 0) return {};
+  const supabase = getSupabaseAdmin();
+  const [viewsRes, commentsRes] = await Promise.all([
+    supabase
+      .from("deck_views")
+      .select("deck_id, last_viewed_at")
+      .eq("user_id", userId)
+      .in("deck_id", deckIds),
+    supabase
+      .from("comments")
+      .select("deck_id, created_at")
+      .in("deck_id", deckIds),
+  ]);
+  if (viewsRes.error) {
+    console.error(
+      "[slide-store] deck_views fetch failed:",
+      viewsRes.error,
+    );
+  }
+  if (commentsRes.error) {
+    console.error(
+      "[slide-store] comment counts fetch failed:",
+      commentsRes.error,
+    );
+  }
+  const lastViewed: Record<string, string> = {};
+  for (const v of (viewsRes.data ?? []) as {
+    deck_id: string;
+    last_viewed_at: string;
+  }[]) {
+    lastViewed[v.deck_id] = v.last_viewed_at;
+  }
+  const counts: Record<string, { total: number; unread: number }> = {};
+  for (const c of (commentsRes.data ?? []) as {
+    deck_id: string;
+    created_at: string;
+  }[]) {
+    const entry =
+      counts[c.deck_id] ?? (counts[c.deck_id] = { total: 0, unread: 0 });
+    entry.total++;
+    const last = lastViewed[c.deck_id];
+    if (!last || c.created_at > last) entry.unread++;
+  }
+  return counts;
+}
+
 export type CommentRow = {
   id: string;
   deck_id: string;
