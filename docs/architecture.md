@@ -90,6 +90,14 @@ security boundaries are.
                 │     (one row = one recipient who has accessed a deck    │
                 │     they don't own, used for "Shared with me")          │
                 │                                                          │
+                │   deck_views table                                       │
+                │   ───────────────                                        │
+                │     deck_id        text → decks(id)         ┐           │
+                │     user_id        uuid → auth.users(id)    │ PK        │
+                │     last_viewed_at timestamptz                          │
+                │     (one row per (user, deck) — used to compute        │
+                │      unread comment counts on the dashboard)            │
+                │                                                          │
                 │   comments table                                         │
                 │   ──────────────                                         │
                 │     id            uuid  PK                               │
@@ -123,6 +131,9 @@ security boundaries are.
                 │                      DELETE only your own rows.         │
                 │                      Anon → denied. (Comments require   │
                 │                      sign-in to read or write.)         │
+                │     deck_views:                                          │
+                │       authenticated→ SELECT / INSERT / UPDATE only      │
+                │                      rows where auth.uid() = user_id    │
                 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -304,6 +315,12 @@ A few extra notes:
 - **`parent_id` and `resolved` are reserved.** They exist in the schema
   so we don't need another migration when threading and the resolve
   workflow land.
+- **Unread comments are surfaced on the dashboard.** Every viewer page
+  load by a signed-in user upserts a row in `deck_views` recording the
+  `last_viewed_at` timestamp. The dashboard then counts comments with
+  `created_at > last_viewed_at` per deck and shows a red dot + "N new"
+  on the card. Total-comment counts (irrespective of read state) are
+  shown alongside.
 
 ## The `?next=` redirect for "sign in and come back"
 
@@ -366,3 +383,4 @@ an open-redirect attack via a crafted magic-link URL.
 | [docs/auth-migration.sql](./auth-migration.sql) | One-shot SQL for the new `user_id`/`title`/`slide_count` columns and the `decks_*_own` RLS policies. Idempotent — safe to re-run. |
 | [docs/shared-decks-migration.sql](./shared-decks-migration.sql) | One-shot SQL for the `shared_decks` table, its RLS policies, and the widened `decks_select_own_or_shared` policy. Idempotent — safe to re-run. |
 | [docs/comments-migration.sql](./comments-migration.sql) | One-shot SQL for the `comments` table and its RLS policies. Includes `parent_id` and `resolved` columns reserved for future threading and triage UI. Idempotent — safe to re-run. |
+| [docs/deck-views-migration.sql](./deck-views-migration.sql) | One-shot SQL for the `deck_views` table and its RLS policies. Used by the dashboard to compute unread comment counts. Idempotent — safe to re-run. |
