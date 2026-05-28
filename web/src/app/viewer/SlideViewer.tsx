@@ -359,22 +359,39 @@ export default function SlideViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [deck.slides.length]);
 
-  // Compute scale-to-fit factor by measuring the card's actual size and
-  // comparing to the slide's natural canvas (1280×720). Re-runs on window
-  // resize. We tried ResizeObserver but it didn't fire reliably in our
-  // Chromium preview harness — window resize covers the only case that
-  // changes the card's size for now (it's responsive to window width).
+  // Measure the wrapper around the slide card and compute card dimensions
+  // that contain the deck's natural aspect ratio within the available
+  // viewport area. Without this, a tall deck (e.g. 1280×2400 captured from
+  // a Claude artifact with stacked mockups) would render 2× viewport
+  // height and force the page to scroll. Same idea as object-fit:contain.
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
   const [scale, setScale] = useState(1);
   useEffect(() => {
     function measure() {
-      const el = cardRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const r = wrapper.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
-      const sX = r.width / deck.slideWidth;
-      const sY = r.height / deck.slideHeight;
-      setScale(Math.min(sX, sY));
+      // Leave a small visual margin around the card so it doesn't touch
+      // the side panel / nav row.
+      const maxW = r.width * 0.95;
+      const maxH = r.height * 0.95;
+      const slideAR = deck.slideWidth / deck.slideHeight;
+      // Pick whichever bound is hit first while preserving the slide's
+      // natural aspect ratio.
+      let w: number;
+      let h: number;
+      if (maxW / slideAR <= maxH) {
+        w = maxW;
+        h = w / slideAR;
+      } else {
+        h = maxH;
+        w = h * slideAR;
+      }
+      setCardSize({ width: Math.floor(w), height: Math.floor(h) });
+      setScale(Math.min(w / deck.slideWidth, h / deck.slideHeight));
     }
     // Measure on mount + next animation frame (the card may not be in the
     // DOM on the very first effect run, because slides are parsed in a
@@ -467,34 +484,44 @@ export default function SlideViewer({
 
   return (
     <div className="flex-1 flex flex-row min-h-0">
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 gap-6 min-w-0">
+      <div className="flex-1 flex flex-col px-6 py-8 gap-6 min-w-0 min-h-0">
         {/*
-          Scale-to-fit slide rendering. The iframe renders at the deck's
-          detected natural canvas (or 1280×720 default), and the card's
-          aspect ratio is matched to those dimensions — so no letterboxing.
-          We then visually scale the iframe down via CSS transform to fit.
+          Scale-to-fit slide rendering. The wrapper takes whatever vertical
+          space is left after the nav row; the card sizes itself to the
+          larger of (width-limited, height-limited) within that space while
+          preserving the deck's natural aspect ratio (object-fit:contain
+          semantics). The iframe inside renders at the deck's detected
+          natural canvas and is then visually scaled via CSS transform.
         */}
         <div
-          ref={cardRef}
-          className="w-[80%] bg-white rounded-2xl shadow-[0_8px_40px_rgba(74,63,181,0.08)] border border-border overflow-hidden flex items-center justify-center"
-          style={{ aspectRatio: `${deck.slideWidth} / ${deck.slideHeight}` }}
+          ref={wrapperRef}
+          className="flex-1 flex items-center justify-center w-full min-h-0"
         >
-          <iframe
-            key={safeIndex}
-            title={`Slide ${safeIndex + 1}`}
-            srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
-            sandbox=""
-            className="border-0 block bg-white shrink-0"
+          <div
+            ref={cardRef}
+            className="bg-white rounded-2xl shadow-[0_8px_40px_rgba(74,63,181,0.08)] border border-border overflow-hidden flex items-center justify-center"
             style={{
-              width: `${deck.slideWidth}px`,
-              height: `${deck.slideHeight}px`,
-              transformOrigin: "center center",
-              transform: `scale(${scale})`,
+              width: cardSize.width ? `${cardSize.width}px` : undefined,
+              height: cardSize.height ? `${cardSize.height}px` : undefined,
             }}
-          />
+          >
+            <iframe
+              key={safeIndex}
+              title={`Slide ${safeIndex + 1}`}
+              srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
+              sandbox=""
+              className="border-0 block bg-white shrink-0"
+              style={{
+                width: `${deck.slideWidth}px`,
+                height: `${deck.slideHeight}px`,
+                transformOrigin: "center center",
+                transform: `scale(${scale})`,
+              }}
+            />
+          </div>
         </div>
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-center justify-center gap-6">
           <button
             type="button"
             onClick={goPrev}
