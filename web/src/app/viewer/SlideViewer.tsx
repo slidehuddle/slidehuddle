@@ -342,9 +342,55 @@ export default function SlideViewer({
   const [comments, setComments] = useState<CommentRow[]>(initialComments);
   const [commentsOpen, setCommentsOpen] = useState(false);
 
+  // Natural canvas dimensions discovered by measuring the iframe's
+  // actual rendered content after it loads. For Claude artifacts that
+  // don't declare explicit pixel sizes in their CSS, detectSlideDimensions
+  // gives up and returns the default — measurement is the ground truth.
+  // null until the iframe has loaded at least once.
+  const [measuredCanvas, setMeasuredCanvas] = useState<
+    { w: number; h: number } | null
+  >(null);
+
   const hasSlides = deck.slides.length > 0;
   const safeIndex = Math.min(index, Math.max(0, deck.slides.length - 1));
   const current = hasSlides ? deck.slides[safeIndex] : "";
+
+  // Effective canvas: prefer the measured-from-DOM value over the
+  // CSS-detected one. Falls back to detected (which itself falls back to
+  // 1280×720) before the iframe has had a chance to render and measure.
+  const effectiveW = measuredCanvas?.w ?? deck.slideWidth;
+  const effectiveH = measuredCanvas?.h ?? deck.slideHeight;
+
+  // Reset measurement whenever the slide content changes, so the next
+  // iframe load triggers a fresh measure.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMeasuredCanvas(null);
+  }, [current]);
+
+  function handleIframeLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
+    // contentDocument is accessible because sandbox="allow-same-origin".
+    // (We deliberately do NOT include allow-scripts — scripts in the
+    // captured HTML must never execute. If a future change adds
+    // allow-scripts, the same-origin sandbox becomes an XSS vector
+    // against this domain. Don't.)
+    const doc = e.currentTarget.contentDocument;
+    if (!doc) return;
+    const body = doc.body;
+    const html = doc.documentElement;
+    if (!body || !html) return;
+    const w = Math.max(body.scrollWidth, html.scrollWidth, body.clientWidth);
+    const h = Math.max(body.scrollHeight, html.scrollHeight, body.clientHeight);
+    if (w <= 0 || h <= 0) return;
+    setMeasuredCanvas((prev) => {
+      // Avoid re-render loops on iframe-resize echo: only update if the
+      // new measurement differs by more than a few pixels.
+      if (prev && Math.abs(prev.w - w) < 4 && Math.abs(prev.h - h) < 4) {
+        return prev;
+      }
+      return { w, h };
+    });
+  }
 
   const goPrev = () => setIndex((i) => Math.max(0, i - 1));
   const goNext = () =>
@@ -378,7 +424,7 @@ export default function SlideViewer({
       // the side panel / nav row.
       const maxW = r.width * 0.95;
       const maxH = r.height * 0.95;
-      const slideAR = deck.slideWidth / deck.slideHeight;
+      const slideAR = effectiveW / effectiveH;
       // Pick whichever bound is hit first while preserving the slide's
       // natural aspect ratio.
       let w: number;
@@ -391,7 +437,7 @@ export default function SlideViewer({
         w = h * slideAR;
       }
       setCardSize({ width: Math.floor(w), height: Math.floor(h) });
-      setScale(Math.min(w / deck.slideWidth, h / deck.slideHeight));
+      setScale(Math.min(w / effectiveW, h / effectiveH));
     }
     // Measure on mount + next animation frame (the card may not be in the
     // DOM on the very first effect run, because slides are parsed in a
@@ -404,8 +450,9 @@ export default function SlideViewer({
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", measure);
     };
-    // Re-run when slide count or detected dimensions change.
-  }, [deck.slides.length, deck.slideWidth, deck.slideHeight]);
+    // Re-run when slide count or effective dimensions change (the
+    // effective dimensions update when the iframe measurement comes in).
+  }, [deck.slides.length, effectiveW, effectiveH]);
 
   // Per-slide and aggregate counts derived from the comments array.
   const commentsBySlide = useMemo(() => {
@@ -509,11 +556,20 @@ export default function SlideViewer({
               key={safeIndex}
               title={`Slide ${safeIndex + 1}`}
               srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
-              sandbox=""
+              // allow-same-origin lets the parent (this component) read
+              // the iframe's natural content size after it lays out, so
+              // we can size the card to the deck's real aspect ratio
+              // instead of the 1280×720 default when no explicit CSS
+              // dimensions are declared. We deliberately do NOT include
+              // allow-scripts — captured HTML must never execute scripts
+              // on slidehuddleapp.vercel.app, because same-origin +
+              // scripts = XSS against this domain.
+              sandbox="allow-same-origin"
+              onLoad={handleIframeLoad}
               className="border-0 block bg-white shrink-0"
               style={{
-                width: `${deck.slideWidth}px`,
-                height: `${deck.slideHeight}px`,
+                width: `${effectiveW}px`,
+                height: `${effectiveH}px`,
                 transformOrigin: "center center",
                 transform: `scale(${scale})`,
               }}
