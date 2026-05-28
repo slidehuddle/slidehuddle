@@ -90,7 +90,21 @@ security boundaries are.
                 │     (one row = one recipient who has accessed a deck    │
                 │     they don't own, used for "Shared with me")          │
                 │                                                          │
-                │   RLS: enabled on both tables                            │
+                │   comments table                                         │
+                │   ──────────────                                         │
+                │     id            uuid  PK                               │
+                │     deck_id       text  → decks(id)                      │
+                │     user_id       uuid  → auth.users(id)                 │
+                │     author_email  text  (snapshot of email at post time) │
+                │     slide_index   integer (0-based)                      │
+                │     parent_id     uuid  → comments(id) (reserved for     │
+                │                          future threaded replies)        │
+                │     body          text  (max 4000 chars)                 │
+                │     resolved      bool  (reserved for future triage UI)  │
+                │     created_at    timestamptz                            │
+                │     updated_at    timestamptz                            │
+                │                                                          │
+                │   RLS: enabled on all tables                             │
                 │     decks:                                               │
                 │       anon         → denied                              │
                 │       authenticated→ SELECT if you own the deck OR it's │
@@ -103,6 +117,12 @@ security boundaries are.
                 │     shared_decks:                                        │
                 │       authenticated→ SELECT / INSERT / DELETE only      │
                 │                      rows where auth.uid() = user_id    │
+                │     comments:                                            │
+                │       authenticated→ SELECT / INSERT on a deck you can  │
+                │                      access (own or shared); UPDATE /   │
+                │                      DELETE only your own rows.         │
+                │                      Anon → denied. (Comments require   │
+                │                      sign-in to read or write.)         │
                 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -249,6 +269,42 @@ A few extra rules to make this safe and sane:
   row — nobody really "shared" a deck with no owner. The deck stays
   reachable only by direct link.
 
+## Comments
+
+Comments live on the `comments` table, one row per comment, scoped to a
+specific deck **and** a specific `slide_index` (0-based). The viewer's
+sidebar shows comments for the current slide; the slide counter shows a
+small "· N" badge when other slides have comments.
+
+The end-to-end flow:
+
+1. The viewer page server-renders. If the user is signed in and can
+   access the deck (owner or has a `shared_decks` row), it fetches their
+   visible comments via `getCommentsForDeck` and passes them down as
+   `initialComments` to `SlideViewer`.
+2. The user clicks **Comments** in the slide nav row. The right-side
+   `CommentsPanel` opens and shows comments filtered to the current
+   slide.
+3. Posting a comment uses the **browser** Supabase client (not the
+   server admin client). The browser sends an authenticated `insert`
+   directly to Supabase; RLS does the rest of the gating.
+4. We snapshot `author_email` on the row at insert time so the comment
+   keeps a sensible display name even if the user later changes their
+   email or deletes their account.
+
+A few extra notes:
+
+- **Anon viewers see no comments.** The RLS policy is `to authenticated`
+  only; there's no policy granted to the anon role. Anyone hitting the
+  viewer with a shared link but no session sees only slides.
+- **Comments on orphan decks are impossible.** RLS requires owner OR
+  shared-deck access; orphans (no `user_id`) match neither, so nobody
+  can post or read. The deck must first be claimed by signing in via the
+  `?source=capture` creator flow.
+- **`parent_id` and `resolved` are reserved.** They exist in the schema
+  so we don't need another migration when threading and the resolve
+  workflow land.
+
 ## The `?next=` redirect for "sign in and come back"
 
 When a viewer-page banner sends an unsigned-in user to `/login`, it tags
@@ -275,6 +331,7 @@ an open-redirect attack via a crafted magic-link URL.
 | Crypto-random deck IDs | Can't enumerate or guess other users' deck URLs. |
 | Supabase RLS — `decks_*` policies | Even with the public anon key, a signed-in user can only `INSERT/UPDATE/DELETE` rows where `auth.uid() = user_id`. `SELECT` allows their own decks *or* decks linked to them via `shared_decks` (the `decks_select_own_or_shared` policy). The anon (logged-out) role has no policies and therefore can't read anything directly. |
 | Supabase RLS — `shared_decks_*_own` policies | Users can only read, insert, or remove their own `shared_decks` rows — they can't snoop on who else has accessed a given deck. |
+| Supabase RLS — `comments_*` policies | Comments are gated behind deck access: you can only read or post comments on a deck you own or have shared with you. The anon role has no policies, so unauthenticated link-viewers see no comments and can't post. Edit/delete restricted to the comment's author. |
 | Open-redirect protection on `?next=` | `/auth/callback` only honours `next` values that start with a single `/`. Absolute URLs and protocol-relative paths are dropped, so a crafted magic link can't bounce a user to a phishing site after sign-in. |
 | Claim-only-on-orphan guard | `claimOrphanDeck` updates `user_id` only when it's currently NULL, so a leaked `?source=capture` URL can't take a deck away from someone who already owns it. |
 | Service-role key on the server only | The only way to bypass RLS is the service-role key, which lives in Vercel's env vars and is never sent to the browser. |
@@ -304,6 +361,8 @@ an open-redirect attack via a crafted magic-link URL.
 | [web/src/app/viewer/SlideViewer.tsx](../web/src/app/viewer/SlideViewer.tsx) | The React component that parses and renders slides |
 | [web/src/app/viewer/ShareBar.tsx](../web/src/app/viewer/ShareBar.tsx) | "Copy link" share bar at the top of stored-deck viewer pages. Strips `?source=capture` before copying. |
 | [web/src/app/viewer/SignInBanner.tsx](../web/src/app/viewer/SignInBanner.tsx) | Banner shown above the viewer to signed-out users — different copy for creators vs recipients, with a "Sign in" link that carries `?next=` back to the viewer. |
+| [web/src/app/viewer/CommentsPanel.tsx](../web/src/app/viewer/CommentsPanel.tsx) | Right-side sidebar that lists comments on the current slide and lets the user post one. |
 | [web/next.config.ts](../web/next.config.ts) | Web app config — security headers live here |
 | [docs/auth-migration.sql](./auth-migration.sql) | One-shot SQL for the new `user_id`/`title`/`slide_count` columns and the `decks_*_own` RLS policies. Idempotent — safe to re-run. |
 | [docs/shared-decks-migration.sql](./shared-decks-migration.sql) | One-shot SQL for the `shared_decks` table, its RLS policies, and the widened `decks_select_own_or_shared` policy. Idempotent — safe to re-run. |
+| [docs/comments-migration.sql](./comments-migration.sql) | One-shot SQL for the `comments` table and its RLS policies. Includes `parent_id` and `resolved` columns reserved for future threading and triage UI. Idempotent — safe to re-run. |
