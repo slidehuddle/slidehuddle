@@ -354,7 +354,7 @@ an open-redirect attack via a crafted magic-link URL.
 | Service-role key on the server only | The only way to bypass RLS is the service-role key, which lives in Vercel's env vars and is never sent to the browser. |
 | HTTP-only session cookies | The `sb-*` auth cookies aren't readable from JavaScript, so an XSS bug on a SlideHuddle page can't steal the session. |
 | Magic-link sign-in | No passwords stored anywhere on our side. The link is one-time and short-lived, and the only way to receive it is to control the email inbox. |
-| `<iframe sandbox="">` in viewer | Even if Claude returns malicious HTML, scripts can't execute in the viewer. |
+| `<iframe sandbox="allow-same-origin">` in viewer | Even if Claude returns malicious HTML, **scripts can't execute** in the viewer (no `allow-scripts`), forms can't submit (no `allow-forms`), popups can't open (no `allow-popups`), the iframe can't navigate the top frame (no `allow-top-navigation`). `allow-same-origin` is included so the parent can read the iframe's natural content size after layout — that's how the viewer knows the deck's real canvas dimensions. **Critical: never add `allow-scripts`** without also removing `allow-same-origin` — same-origin + scripts in user-supplied HTML = XSS against `slidehuddleapp.vercel.app`. |
 | Web security headers | Defence-in-depth against clickjacking, MIME-sniffing attacks, info leakage to third parties. |
 
 ## Key files
