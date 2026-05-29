@@ -84,7 +84,7 @@ function captureBestHtmlFromHere() {
     ", score=" + bestScore + ", length=" + best.html.length +
     " (considered " + candidates.length + " candidates)",
   );
-  return { html: best.html, score: bestScore };
+  return best.html;
 }
 
 function installIframeHandler() {
@@ -93,16 +93,14 @@ function installIframeHandler() {
     if (!data || typeof data !== "object") return;
     if (data.__slidehuddle !== "capture") return;
     try {
-      const { html, score } = captureBestHtmlFromHere();
+      const html = captureBestHtmlFromHere();
       event.source?.postMessage({
         __slidehuddle: "capture-result",
         requestId: data.requestId,
         html,
-        score,
       }, "*");
       console.log(
-        "[SlideHuddle/iframe] sent capture-result, length=" + html.length +
-        ", score=" + score,
+        "[SlideHuddle/iframe] sent capture-result, length=" + html.length,
       );
     } catch (err) {
       console.error("[SlideHuddle/iframe] capture failed:", err);
@@ -110,7 +108,6 @@ function installIframeHandler() {
         __slidehuddle: "capture-result",
         requestId: data.requestId,
         html: "",
-        score: 0,
         error: String(err && err.message || err),
       }, "*");
     }
@@ -219,10 +216,7 @@ function installCaptureReplyListener() {
     if (data.error) {
       cb.reject(new Error("Iframe error: " + data.error));
     } else {
-      cb.resolve({
-        html: data.html || "",
-        score: typeof data.score === "number" ? data.score : 0,
-      });
+      cb.resolve(data.html || "");
     }
   });
 }
@@ -419,11 +413,7 @@ function makeArtifactGetHtml(block) {
         "[SlideHuddle] artifact capture: using preview iframe, src=" +
         (previewFrame.src || "").slice(0, 100),
       );
-      const { html, score } = await captureFromIframe(previewFrame);
-      if (score === 0) {
-        throw new Error("No slides found in this artifact");
-      }
-      return html;
+      return await captureFromIframe(previewFrame);
     }
     throw new Error(
       "No source found. Open the artifact preview, then try again.",
@@ -575,21 +565,11 @@ function isHiddenOrTinyIframe(frame) {
   return false;
 }
 
-// Per-iframe markers used by the probe-then-inject flow. Iframes hosted on
-// claudemcpcontent.com can be slide decks OR non-slide mini-apps (e.g.
-// "visualize" diagrams that need the MCP runtime to render). Rather than
-// guessing from the URL, we probe the iframe's HTML once and only inject the
-// button when it actually contains slide-shaped markup.
-const PROBING_ATTR = "data-slidehuddle-probing";
-const NO_SLIDES_ATTR = "data-slidehuddle-no-slides";
-
 function detectInlineIframeSlides() {
   const iframes = document.querySelectorAll("iframe");
   let found = false;
 
   iframes.forEach((frame) => {
-    if (frame.hasAttribute(PROBING_ATTR)) return;
-    if (frame.hasAttribute(NO_SLIDES_ATTR)) return;
     if (frame.closest("[" + PROCESSED_ATTR + "]")) return;
     const src = frame.src || "";
     if (!INLINE_SLIDE_IFRAME_PATTERNS.some((p) => p.test(src))) return;
@@ -605,45 +585,17 @@ function detectInlineIframeSlides() {
     if (!wrapper || wrapper.querySelector("." + BAR_CLASS)) return;
 
     console.log(
-      "[SlideHuddle] probing inline iframe, title=" +
+      "[SlideHuddle] inline iframe detected, title=" +
       JSON.stringify(frame.title) + ", src=" + src.slice(0, 120),
     );
-    frame.setAttribute(PROBING_ATTR, "true");
-    found = true;
 
-    captureFromIframe(frame).then(({ score }) => {
-      frame.removeAttribute(PROBING_ATTR);
-      if (score === 0) {
-        frame.setAttribute(NO_SLIDES_ATTR, "true");
-        console.log(
-          "[SlideHuddle] iframe has no slide markup (score=0), skipping",
-        );
-        return;
-      }
-      if (!wrapper.isConnected) return;
-      if (wrapper.querySelector("." + BAR_CLASS)) return;
-      wrapper.setAttribute(PROCESSED_ATTR, "true");
-      wrapper.insertAdjacentElement(
-        "afterend",
-        createBar("html-iframe", async () => {
-          const r = await captureFromIframe(frame);
-          if (r.score === 0) {
-            throw new Error("No slides found in this iframe");
-          }
-          return r.html;
-        }),
-      );
-      console.log(
-        "[SlideHuddle] button injected (inline iframe), score=" + score,
-      );
-    }).catch((err) => {
-      frame.removeAttribute(PROBING_ATTR);
-      frame.setAttribute(NO_SLIDES_ATTR, "true");
-      console.log(
-        "[SlideHuddle] iframe probe failed, skipping: " +
-        (err && err.message),
-      );
-    });
+    wrapper.setAttribute(PROCESSED_ATTR, "true");
+    wrapper.insertAdjacentElement(
+      "afterend",
+      createBar("html-iframe", () => captureFromIframe(frame)),
+    );
+    found = true;
+    console.log("[SlideHuddle] button injected (inline iframe)");
   });
 
   return found;
