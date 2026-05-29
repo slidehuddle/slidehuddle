@@ -296,6 +296,37 @@ const FIT_TO_FRAME_CSS = `
 // case).
 const MEASURE_SCRIPT = `
 (function () {
+  function summarise() {
+    var b = document.body;
+    var h = document.documentElement;
+    if (!b || !h) return null;
+    var kids = b.children;
+    var childSummaries = [];
+    for (var i = 0; i < kids.length && i < 12; i++) {
+      var el = kids[i];
+      var r = el.getBoundingClientRect();
+      childSummaries.push({
+        tag: el.tagName.toLowerCase(),
+        cls: (el.className || "").toString().slice(0, 80),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        top: Math.round(r.top),
+        bottom: Math.round(r.bottom),
+      });
+    }
+    return {
+      bodyScrollW: b.scrollWidth,
+      bodyScrollH: b.scrollHeight,
+      bodyClientW: b.clientWidth,
+      bodyClientH: b.clientHeight,
+      htmlScrollW: h.scrollWidth,
+      htmlScrollH: h.scrollHeight,
+      childCount: kids.length,
+      children: childSummaries,
+      // First 400 chars of body HTML — enough to see the top-level structure.
+      bodyHtmlSnippet: (b.outerHTML || "").slice(0, 400),
+    };
+  }
   function post() {
     try {
       var b = document.body;
@@ -305,7 +336,7 @@ const MEASURE_SCRIPT = `
       var ht = Math.max(b.scrollHeight, h.scrollHeight);
       if (w > 0 && ht > 0) {
         window.parent.postMessage(
-          { __slidehuddle: "measure", w: w, h: ht },
+          { __slidehuddle: "measure", w: w, h: ht, debug: summarise() },
           "*"
         );
       }
@@ -413,10 +444,19 @@ export default function SlideViewer({
   // scripts inject or animate content into place.
   useEffect(() => {
     function handle(e: MessageEvent) {
-      const data = e.data as { __slidehuddle?: string; w?: number; h?: number };
+      const data = e.data as {
+        __slidehuddle?: string;
+        w?: number;
+        h?: number;
+        debug?: unknown;
+      };
       if (!data || data.__slidehuddle !== "measure") return;
       if (typeof data.w !== "number" || typeof data.h !== "number") return;
       if (data.w <= 0 || data.h <= 0) return;
+      // Diagnostic logging (temporary). Helps see what the iframe is
+      // actually reporting when sizing looks wrong. Safe to leave on
+      // until we've figured out the tall-content-with-empty-space case.
+      console.log("[SlideHuddle measure]", { w: data.w, h: data.h, debug: data.debug });
       setMeasuredCanvas((prev) => {
         if (
           prev &&
