@@ -280,6 +280,7 @@ const FIT_TO_FRAME_CSS = `
     margin: 0;
     padding: 0;
     width: 100%;
+    height: 100%;
     overflow: hidden;
   }
   body { display: block; }
@@ -295,51 +296,16 @@ const FIT_TO_FRAME_CSS = `
 // case).
 const MEASURE_SCRIPT = `
 (function () {
-  function summarise() {
-    var b = document.body;
-    var h = document.documentElement;
-    if (!b || !h) return null;
-    var kids = b.children;
-    var childSummaries = [];
-    for (var i = 0; i < kids.length && i < 12; i++) {
-      var el = kids[i];
-      var r = el.getBoundingClientRect();
-      childSummaries.push({
-        tag: el.tagName.toLowerCase(),
-        cls: (el.className || "").toString().slice(0, 80),
-        w: Math.round(r.width),
-        h: Math.round(r.height),
-        top: Math.round(r.top),
-        bottom: Math.round(r.bottom),
-      });
-    }
-    return {
-      bodyScrollW: b.scrollWidth,
-      bodyScrollH: b.scrollHeight,
-      bodyClientW: b.clientWidth,
-      bodyClientH: b.clientHeight,
-      htmlScrollW: h.scrollWidth,
-      htmlScrollH: h.scrollHeight,
-      childCount: kids.length,
-      children: childSummaries,
-      // First 400 chars of body HTML — enough to see the top-level structure.
-      bodyHtmlSnippet: (b.outerHTML || "").slice(0, 400),
-    };
-  }
   function post() {
     try {
       var b = document.body;
       var h = document.documentElement;
       if (!b || !h) return;
-      // Prefer body's own scroll dimensions. The html element's
-      // scrollHeight tends to be at least the iframe viewport height,
-      // which hides the case where body has shrunk to natural content.
-      // Fall back to html only when body is genuinely empty.
-      var w = b.scrollWidth || h.scrollWidth;
-      var ht = b.scrollHeight || h.scrollHeight;
+      var w = Math.max(b.scrollWidth, h.scrollWidth);
+      var ht = Math.max(b.scrollHeight, h.scrollHeight);
       if (w > 0 && ht > 0) {
         window.parent.postMessage(
-          { __slidehuddle: "measure", w: w, h: ht, debug: summarise() },
+          { __slidehuddle: "measure", w: w, h: ht },
           "*"
         );
       }
@@ -451,15 +417,10 @@ export default function SlideViewer({
         __slidehuddle?: string;
         w?: number;
         h?: number;
-        debug?: unknown;
       };
       if (!data || data.__slidehuddle !== "measure") return;
       if (typeof data.w !== "number" || typeof data.h !== "number") return;
       if (data.w <= 0 || data.h <= 0) return;
-      // Diagnostic logging (temporary). Helps see what the iframe is
-      // actually reporting when sizing looks wrong. Safe to leave on
-      // until we've figured out the tall-content-with-empty-space case.
-      console.log("[SlideHuddle measure]", { w: data.w, h: data.h, debug: data.debug });
       setMeasuredCanvas((prev) => {
         if (
           prev &&
