@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { storeSlides } from "@/lib/slide-store";
+import { countSlides, storeSlides } from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
 // Hard cap on captured slide HTML. Claude decks we've seen are well under
@@ -103,6 +103,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "Slide HTML exceeds size limit" },
       { status: 413, headers },
+    );
+  }
+
+  // Slide-deck filter. Reject HTML that doesn't look like a multi-slide
+  // presentation. Claude's newer mockup-style artifacts (UI wireframes,
+  // single-page designs) capture cleanly but depend on Claude's design-
+  // system CSS variables to render correctly — they look broken in any
+  // environment outside claude.ai. Better to reject them up-front with a
+  // clear message than to store a deck that won't render usefully.
+  //
+  // Heuristic mirrors SlideViewer's parseDeck strategy priority:
+  //   - 2+ elements with class="slide" (whole-token match), OR
+  //   - 2+ <section> elements in the document.
+  // A real Claude slide deck has multiple slides; mockups are usually
+  // one page with no <section> markup.
+  const slideCount = countSlides(html) ?? 0;
+  if (slideCount < 2) {
+    return NextResponse.json(
+      {
+        error:
+          "This doesn't look like a slide deck. SlideHuddle works with multi-slide presentations from Claude — single-page mockups and standalone artifacts aren't supported yet.",
+      },
+      { status: 422, headers },
     );
   }
 

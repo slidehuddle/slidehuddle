@@ -38,7 +38,7 @@ function extractTitle(html: string): string | null {
   return null;
 }
 
-function countSlides(html: string): number | null {
+export function countSlides(html: string): number | null {
   // Mirror SlideViewer's strategy priority: prefer .slide elements; fall
   // back to bare <section> only when there are no .slide elements at all.
   // (Claude decks frequently include non-slide <section>s for navigation,
