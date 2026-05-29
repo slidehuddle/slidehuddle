@@ -38,6 +38,31 @@ function extractTitle(html: string): string | null {
   return null;
 }
 
+// Does the HTML depend on CSS variables / utility classes that only exist
+// inside claude.ai itself? Claude's chat UI defines a compound-Tailwind
+// design system (bg-bg-100, text-text-100, font-ui, etc.) where the inner
+// token is the Claude design-system *name*, not a standard Tailwind color.
+// Artifacts authored against that design system render correctly in the
+// chat preview but break outside it — colors, fonts, and spacing all fall
+// back to nothing. Such artifacts shouldn't be accepted by SlideHuddle
+// because they'll display broken regardless of how we render them.
+//
+// Genuinely standalone HTML artifacts (the kind Claude lets you download
+// as a .html file) don't use these classes — they have all their CSS
+// inline.
+export function dependsOnClaudeDesignSystem(html: string): boolean {
+  // Compound Tailwind utilities where the color name is "bg" / "text" /
+  // "border" — extremely unusual outside Claude's design system.
+  if (/\b(?:bg-bg-|text-text-|border-border-)\d/.test(html)) return true;
+  // Claude's font utilities.
+  if (/\bfont-(?:ui|copernicus|tiempos|claude|styrene)\b/.test(html)) {
+    return true;
+  }
+  // Claude's interface root class.
+  if (/\bchat-ui-core\b/.test(html)) return true;
+  return false;
+}
+
 export function countSlides(html: string): number | null {
   // Mirror SlideViewer's strategy priority: prefer .slide elements; fall
   // back to bare <section> only when there are no .slide elements at all.

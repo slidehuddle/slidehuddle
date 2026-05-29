@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { countSlides, storeSlides } from "@/lib/slide-store";
+import {
+  countSlides,
+  dependsOnClaudeDesignSystem,
+  storeSlides,
+} from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
 // Hard cap on captured slide HTML. Claude decks we've seen are well under
@@ -106,24 +110,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Slide-deck filter. Reject HTML that doesn't look like a multi-slide
-  // presentation. Claude's newer mockup-style artifacts (UI wireframes,
-  // single-page designs) capture cleanly but depend on Claude's design-
-  // system CSS variables to render correctly — they look broken in any
-  // environment outside claude.ai. Better to reject them up-front with a
-  // clear message than to store a deck that won't render usefully.
-  //
-  // Heuristic mirrors SlideViewer's parseDeck strategy priority:
-  //   - 2+ elements with class="slide" (whole-token match), OR
-  //   - 2+ <section> elements in the document.
-  // A real Claude slide deck has multiple slides; mockups are usually
-  // one page with no <section> markup.
+  // Capture-shape filter. We accept either:
+  //   - multi-slide decks (2+ slide-shaped elements), or
+  //   - self-contained single-page HTML artifacts.
+  // We reject inline-chat-only mockups that depend on Claude's design-
+  // system CSS variables (bg-bg-100, font-ui, etc.) defined on claude.ai
+  // itself — those capture cleanly but render with broken sizing, missing
+  // colors, and wrong proportions anywhere outside the chat. A real
+  // standalone artifact has all its CSS inline and doesn't reference
+  // Claude-specific class names.
   const slideCount = countSlides(html) ?? 0;
-  if (slideCount < 2) {
+  const isMultiSlideDeck = slideCount >= 2;
+  const needsClaudeContext = dependsOnClaudeDesignSystem(html);
+  if (!isMultiSlideDeck && needsClaudeContext) {
     return NextResponse.json(
       {
-        error:
-          "This doesn't look like a slide deck. SlideHuddle works with multi-slide presentations from Claude — single-page mockups and standalone artifacts aren't supported yet.",
+        error: "Chat-only mockup",
+        detail:
+          "This artifact relies on Claude's design-system styles and won't render correctly outside the chat. SlideHuddle accepts multi-slide decks and self-contained single-page HTML artifacts.",
       },
       { status: 422, headers },
     );
