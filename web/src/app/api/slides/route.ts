@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
   if (!isMultiSlideDeck && needsClaudeContext) {
     return NextResponse.json(
       {
-        error: "Chat-only mockup",
+        error: "Sorry — not a slide deck",
         detail:
           "This artifact relies on Claude's design-system styles and won't render correctly outside the chat. SlideHuddle accepts multi-slide decks and self-contained single-page HTML artifacts.",
       },
