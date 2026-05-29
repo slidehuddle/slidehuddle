@@ -286,6 +286,42 @@ const FIT_TO_FRAME_CSS = `
   body { display: block; }
 `;
 
+// Tiny script injected at the end of every slide's HTML. Runs only in the
+// display iframe (sandbox="allow-scripts"); the measurement iframe has no
+// allow-scripts so this is a no-op there. The script posts the rendered
+// content's dimensions back to the parent so the card can be sized to
+// what the user actually sees — important for Claude artifacts whose
+// scripts inject content or animate it into place (the static-layout
+// measurement done by the hidden iframe gives the WRONG answer in that
+// case).
+const MEASURE_SCRIPT = `
+(function () {
+  function post() {
+    try {
+      var b = document.body;
+      var h = document.documentElement;
+      if (!b || !h) return;
+      var w = Math.max(b.scrollWidth, h.scrollWidth);
+      var ht = Math.max(b.scrollHeight, h.scrollHeight);
+      if (w > 0 && ht > 0) {
+        window.parent.postMessage(
+          { __slidehuddle: "measure", w: w, h: ht },
+          "*"
+        );
+      }
+    } catch (e) {}
+  }
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    post();
+  } else {
+    document.addEventListener("DOMContentLoaded", post);
+  }
+  window.addEventListener("load", post);
+  setTimeout(post, 500);
+  setTimeout(post, 1500);
+})();
+`;
+
 function buildSrcdoc(
   slideHtml: string,
   headHtml: string,
@@ -305,7 +341,7 @@ function buildSrcdoc(
   <style>${baseCss}</style>
   ${headHtml}
 </head>
-<body>${slideHtml}</body>
+<body>${slideHtml}<script>${MEASURE_SCRIPT}</script></body>
 </html>`;
 }
 
@@ -368,33 +404,33 @@ export default function SlideViewer({
     setMeasuredCanvas(null);
   }, [current]);
 
-  // Fires when the HIDDEN measurement iframe finishes loading. That iframe
-  // uses sandbox="allow-same-origin" (no allow-scripts), so we can read
-  // its contentDocument and measure the deck's natural canvas dimensions.
-  // The visible display iframe runs with sandbox="allow-scripts" (opaque
-  // origin) so Claude's HTML can run its layout/animation scripts and
-  // render correctly. The combination "allow-scripts + allow-same-origin"
-  // on a single iframe would be an XSS vector against this domain — we
-  // deliberately split the responsibilities across two iframes to avoid
-  // ever needing it.
-  function handleMeasureLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
-    const doc = e.currentTarget.contentDocument;
-    if (!doc) return;
-    const body = doc.body;
-    const html = doc.documentElement;
-    if (!body || !html) return;
-    const w = Math.max(body.scrollWidth, html.scrollWidth, body.clientWidth);
-    const h = Math.max(body.scrollHeight, html.scrollHeight, body.clientHeight);
-    if (w <= 0 || h <= 0) return;
-    setMeasuredCanvas((prev) => {
-      // Avoid re-render loops on iframe-resize echo: only update if the
-      // new measurement differs by more than a few pixels.
-      if (prev && Math.abs(prev.w - w) < 4 && Math.abs(prev.h - h) < 4) {
-        return prev;
-      }
-      return { w, h };
-    });
-  }
+  // The display iframe runs MEASURE_SCRIPT, which posts the rendered
+  // content size back here via postMessage. The display iframe has an
+  // opaque origin (sandbox="allow-scripts" without allow-same-origin),
+  // so cross-origin postMessage is the only way it can communicate with
+  // the parent. We measure the actual rendered content — not the static
+  // pre-script layout — which is what matters for Claude artifacts whose
+  // scripts inject or animate content into place.
+  useEffect(() => {
+    function handle(e: MessageEvent) {
+      const data = e.data as { __slidehuddle?: string; w?: number; h?: number };
+      if (!data || data.__slidehuddle !== "measure") return;
+      if (typeof data.w !== "number" || typeof data.h !== "number") return;
+      if (data.w <= 0 || data.h <= 0) return;
+      setMeasuredCanvas((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.w - data.w!) < 4 &&
+          Math.abs(prev.h - data.h!) < 4
+        ) {
+          return prev;
+        }
+        return { w: data.w!, h: data.h! };
+      });
+    }
+    window.addEventListener("message", handle);
+    return () => window.removeEventListener("message", handle);
+  }, []);
 
   const goPrev = () => setIndex((i) => Math.max(0, i - 1));
   const goNext = () =>
@@ -534,34 +570,7 @@ export default function SlideViewer({
   }
 
   return (
-    <div className="flex-1 flex flex-row min-h-0 relative">
-      {/*
-        Hidden measurement iframe. Loads the same HTML as the visible
-        display iframe but with sandbox="allow-same-origin" (no scripts)
-        so the parent can read contentDocument and discover the deck's
-        natural canvas size. Pushed off-screen by absolute positioning
-        rather than display:none, because display:none would prevent
-        layout from running at all.
-      */}
-      <iframe
-        key={`measure-${safeIndex}`}
-        title="measurement"
-        srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
-        sandbox="allow-same-origin"
-        onLoad={handleMeasureLoad}
-        aria-hidden="true"
-        tabIndex={-1}
-        style={{
-          position: "absolute",
-          left: "-99999px",
-          top: "-99999px",
-          width: `${deck.slideWidth}px`,
-          height: `${deck.slideHeight}px`,
-          border: 0,
-          pointerEvents: "none",
-        }}
-      />
-
+    <div className="flex-1 flex flex-row min-h-0">
       <div className="flex-1 flex flex-col px-6 py-8 gap-6 min-w-0 min-h-0">
         {/*
           Scale-to-fit slide rendering. The wrapper takes whatever vertical
