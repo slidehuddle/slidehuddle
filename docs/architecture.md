@@ -345,6 +345,7 @@ an open-redirect attack via a crafted magic-link URL.
 | Extension `host_permissions` | Extension can only fetch from claude.ai, the Vercel domain, and localhost. Can't be tricked into hitting random servers. |
 | API origin allowlist | A malicious website can't POST junk decks to the API even if a visitor lands there. |
 | API size & content-type checks | Can't flood Supabase with megabytes of garbage per request. |
+| API capture-shape filter | `/api/slides` rejects HTML that depends on Claude's design-system CSS (compound utility classes like `bg-bg-100`, `font-ui`, `chat-ui-core`) unless it's a multi-slide deck. Those artifacts capture cleanly but render with broken sizing outside `claude.ai` — better to reject up-front with a friendly message than to store a deck that won't display correctly. The 422 response carries a short `error` label (button-friendly) and a longer `detail` (logged by the extension). |
 | Crypto-random deck IDs | Can't enumerate or guess other users' deck URLs. |
 | Supabase RLS — `decks_*` policies | Even with the public anon key, a signed-in user can only `INSERT/UPDATE/DELETE` rows where `auth.uid() = user_id`. `SELECT` allows their own decks *or* decks linked to them via `shared_decks` (the `decks_select_own_or_shared` policy). The anon (logged-out) role has no policies and therefore can't read anything directly. |
 | Supabase RLS — `shared_decks_*_own` policies | Users can only read, insert, or remove their own `shared_decks` rows — they can't snoop on who else has accessed a given deck. |
@@ -365,7 +366,7 @@ an open-redirect attack via a crafted magic-link URL.
 | [content.js](../content.js) | The extension script that runs on Claude pages |
 | [popup.html](../popup.html) | The small info popup when the extension icon is clicked |
 | [web/src/app/api/slides/route.ts](../web/src/app/api/slides/route.ts) | The POST endpoint that stores captured decks. Does a best-effort session lookup to attach `user_id`. |
-| [web/src/lib/slide-store.ts](../web/src/lib/slide-store.ts) | Supabase wrapper for storing/fetching decks. Derives `title` and `slide_count` from the HTML on insert. Also exposes `claimOrphanDeck` (sets `user_id` on an unclaimed deck) and `trackSharedDeck` (upserts a `shared_decks` row for recipient flows). |
+| [web/src/lib/slide-store.ts](../web/src/lib/slide-store.ts) | Supabase wrapper for storing/fetching decks. Derives `title` and `slide_count` from the HTML on insert. Exports `countSlides` (used by both the parser and the API filter), `dependsOnClaudeDesignSystem` (used by the API filter), `claimOrphanDeck`, `trackSharedDeck`, `recordDeckView`, `getDeckShareCounts`, `getDeckCommentCountsForUser`, and the comments helpers. |
 | [web/src/lib/supabase.ts](../web/src/lib/supabase.ts) | Lazy-initialised service-role (admin) Supabase client — bypasses RLS, server-only |
 | [web/src/lib/supabase-server.ts](../web/src/lib/supabase-server.ts) | Per-request anon-key Supabase client wired to the request's cookies — used for any "who is signed in?" check |
 | [web/src/lib/supabase-browser.ts](../web/src/lib/supabase-browser.ts) | Browser anon-key Supabase client — used by the login form to trigger the magic-link email |
