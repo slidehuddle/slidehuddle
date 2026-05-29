@@ -368,12 +368,16 @@ export default function SlideViewer({
     setMeasuredCanvas(null);
   }, [current]);
 
-  function handleIframeLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
-    // contentDocument is accessible because sandbox="allow-same-origin".
-    // (We deliberately do NOT include allow-scripts — scripts in the
-    // captured HTML must never execute. If a future change adds
-    // allow-scripts, the same-origin sandbox becomes an XSS vector
-    // against this domain. Don't.)
+  // Fires when the HIDDEN measurement iframe finishes loading. That iframe
+  // uses sandbox="allow-same-origin" (no allow-scripts), so we can read
+  // its contentDocument and measure the deck's natural canvas dimensions.
+  // The visible display iframe runs with sandbox="allow-scripts" (opaque
+  // origin) so Claude's HTML can run its layout/animation scripts and
+  // render correctly. The combination "allow-scripts + allow-same-origin"
+  // on a single iframe would be an XSS vector against this domain — we
+  // deliberately split the responsibilities across two iframes to avoid
+  // ever needing it.
+  function handleMeasureLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
     const doc = e.currentTarget.contentDocument;
     if (!doc) return;
     const body = doc.body;
@@ -530,7 +534,34 @@ export default function SlideViewer({
   }
 
   return (
-    <div className="flex-1 flex flex-row min-h-0">
+    <div className="flex-1 flex flex-row min-h-0 relative">
+      {/*
+        Hidden measurement iframe. Loads the same HTML as the visible
+        display iframe but with sandbox="allow-same-origin" (no scripts)
+        so the parent can read contentDocument and discover the deck's
+        natural canvas size. Pushed off-screen by absolute positioning
+        rather than display:none, because display:none would prevent
+        layout from running at all.
+      */}
+      <iframe
+        key={`measure-${safeIndex}`}
+        title="measurement"
+        srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
+        sandbox="allow-same-origin"
+        onLoad={handleMeasureLoad}
+        aria-hidden="true"
+        tabIndex={-1}
+        style={{
+          position: "absolute",
+          left: "-99999px",
+          top: "-99999px",
+          width: `${deck.slideWidth}px`,
+          height: `${deck.slideHeight}px`,
+          border: 0,
+          pointerEvents: "none",
+        }}
+      />
+
       <div className="flex-1 flex flex-col px-6 py-8 gap-6 min-w-0 min-h-0">
         {/*
           Scale-to-fit slide rendering. The wrapper takes whatever vertical
@@ -552,20 +583,21 @@ export default function SlideViewer({
               height: cardSize.height ? `${cardSize.height}px` : undefined,
             }}
           >
+            {/*
+              Visible display iframe. allow-scripts (without
+              allow-same-origin) lets Claude's HTML run its layout /
+              animation scripts inside an opaque-origin sandbox — scripts
+              can do whatever they want inside the iframe but can't reach
+              the parent page. This is the standard pattern used by
+              CodePen, JSFiddle, etc. Measurement is done by the hidden
+              second iframe below; the parent can read THAT one because
+              it uses allow-same-origin (with no scripts).
+            */}
             <iframe
-              key={safeIndex}
+              key={`display-${safeIndex}`}
               title={`Slide ${safeIndex + 1}`}
               srcDoc={buildSrcdoc(current, deck.headHtml, deck.hasAuthoredStyles)}
-              // allow-same-origin lets the parent (this component) read
-              // the iframe's natural content size after it lays out, so
-              // we can size the card to the deck's real aspect ratio
-              // instead of the 1280×720 default when no explicit CSS
-              // dimensions are declared. We deliberately do NOT include
-              // allow-scripts — captured HTML must never execute scripts
-              // on slidehuddleapp.vercel.app, because same-origin +
-              // scripts = XSS against this domain.
-              sandbox="allow-same-origin"
-              onLoad={handleIframeLoad}
+              sandbox="allow-scripts"
               className="border-0 block bg-white shrink-0"
               style={{
                 width: `${effectiveW}px`,
