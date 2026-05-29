@@ -179,7 +179,23 @@ async function sendSlides(html) {
     body: html,
   });
   if (!response.ok) {
-    throw new Error("API returned " + response.status);
+    // Try to surface the server's friendly error/detail. The API returns
+    // a JSON body like { error: "Short label", detail: "Long sentence" }
+    // for known rejections; we use `error` as a button-fitting label and
+    // log `detail` for diagnostic context.
+    let label = "API returned " + response.status;
+    try {
+      const data = await response.json();
+      if (data && typeof data.error === "string" && data.error.length > 0) {
+        label = data.error;
+        if (typeof data.detail === "string" && data.detail.length > 0) {
+          console.warn("[SlideHuddle] server rejected capture:", data.detail);
+        }
+      }
+    } catch (_) {
+      // Body wasn't JSON — keep the default "API returned N" label.
+    }
+    throw new Error(label);
   }
   const data = await response.json();
   if (!data || typeof data.url !== "string") {
@@ -298,7 +314,18 @@ function createBar(slideType, getHtml) {
       }, 2000);
     } catch (err) {
       console.error("[SlideHuddle] Failed to send slides:", err);
-      flashError(button, "Failed — is SlideHuddle running?", originalText);
+      // Surface the server's friendly error label (set by sendSlides()
+      // from the response body) if we got one. Pure "API returned N"
+      // or generic Error messages indicate a network / unreachable
+      // problem — fall back to the original "is SlideHuddle running?"
+      // copy in that case.
+      const msg = (err && err.message) || "";
+      const isNetworkError =
+        !msg || /^API returned \d+$/.test(msg) || /^Failed to fetch/i.test(msg);
+      const userMessage = isNetworkError
+        ? "Failed — is SlideHuddle running?"
+        : msg;
+      flashError(button, userMessage, originalText);
     }
   });
 
