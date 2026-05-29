@@ -331,8 +331,12 @@ const MEASURE_SCRIPT = `
       var b = document.body;
       var h = document.documentElement;
       if (!b || !h) return;
-      var w = Math.max(b.scrollWidth, h.scrollWidth);
-      var ht = Math.max(b.scrollHeight, h.scrollHeight);
+      // Prefer body's own scroll dimensions. The html element's
+      // scrollHeight tends to be at least the iframe viewport height,
+      // which hides the case where body has shrunk to natural content.
+      // Fall back to html only when body is genuinely empty.
+      var w = b.scrollWidth || h.scrollWidth;
+      var ht = b.scrollHeight || h.scrollHeight;
       if (w > 0 && ht > 0) {
         window.parent.postMessage(
           { __slidehuddle: "measure", w: w, h: ht, debug: summarise() },
