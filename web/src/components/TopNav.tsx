@@ -1,45 +1,47 @@
 import Link from "next/link";
 import { getSupabaseServer } from "@/lib/supabase-server";
+import AvatarMenu from "./AvatarMenu";
 
-export default async function TopNav() {
+// The single, shared top navigation bar used on every page (dashboard, home,
+// login, and the viewer). Change it here and it updates everywhere.
+//
+// Left: the SlideHuddle logo (→ dashboard when signed in, home otherwise).
+// Right: the user's avatar with a dropdown (My decks · Sign out), or a single
+// "Sign in" link when signed out.
+//
+// It fetches the signed-in user itself so it can be dropped into any layout
+// or page with no wiring. The optional `loginHref` lets a page send the user
+// back to where they were after signing in (the viewer uses this to carry a
+// `?next=` back to the deck).
+export default async function TopNav({
+  loginHref = "/login",
+}: {
+  loginHref?: string;
+}) {
   const supabase = await getSupabaseServer();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const email = user?.email ?? null;
   const homeHref = user ? "/dashboard" : "/";
 
   return (
-    <header className="flex items-center justify-between px-8 py-4 border-b border-border">
+    <header className="flex items-center justify-between gap-4 px-6 h-14 shrink-0 border-b border-border bg-white">
       <Link
         href={homeHref}
         className="flex items-center gap-2 text-brand font-semibold"
+        aria-label="SlideHuddle — go to your dashboard"
       >
         <span className="inline-block h-6 w-6 rounded-md bg-brand" />
         SlideHuddle
       </Link>
 
-      {user ? (
-        <div className="flex items-center gap-6">
-          <Link
-            href="/dashboard"
-            className="text-sm font-semibold text-foreground hover:text-brand transition-colors"
-          >
-            My decks
-          </Link>
-          <span className="text-sm text-muted">{user.email}</span>
-          <form action="/auth/signout" method="post">
-            <button
-              type="submit"
-              className="text-sm font-semibold text-brand hover:text-brand-hover"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
+      {email ? (
+        <AvatarMenu email={email} />
       ) : (
         <Link
-          href="/login"
+          href={loginHref}
           className="text-sm font-semibold text-brand hover:text-brand-hover"
         >
           Sign in

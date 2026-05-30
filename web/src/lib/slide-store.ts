@@ -390,6 +390,102 @@ export async function getCommentsForDeck(
   return (data ?? []) as CommentRow[];
 }
 
+// A Supabase error that just means "this table hasn't been created yet"
+// (the migration hasn't been run). We treat that as an expected empty
+// result rather than a real error, so it doesn't spam the server console
+// or surface as a Next.js dev-overlay issue before the migrations land.
+function isMissingTableError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  // PGRST205 = PostgREST "table not found in schema cache";
+  // 42P01     = Postgres "undefined_table".
+  if (error.code === "PGRST205" || error.code === "42P01") return true;
+  return /could not find the table|does not exist/i.test(error.message ?? "");
+}
+
+// --- Slide stubs ("requested slides") ---------------------------------
+//
+// A stub is a placeholder slide a collaborator asks to be added. It sits at
+// a `position` (number of real slides before it) without modifying the
+// captured HTML. Read with the admin client so anonymous link-viewers still
+// see requested slides in the strip; writes go through the browser client
+// under RLS. `requested_by_email` is resolved server-side for display and
+// is not a stored column.
+export type StubRow = {
+  id: string;
+  deck_id: string;
+  position: number;
+  title: string | null;
+  subtitle: string | null;
+  body: string | null;
+  requested_by: string | null;
+  requested_by_email: string | null;
+  created_at: string;
+};
+
+export async function getStubsForDeck(deckId: string): Promise<StubRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("slide_stubs")
+    .select("id, deck_id, position, title, subtitle, body, requested_by, created_at")
+    .eq("deck_id", deckId)
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) {
+    // Pre-migration the table may not exist yet; that's an expected empty
+    // result, not an error worth logging. Log anything else.
+    if (!isMissingTableError(error)) {
+      console.error("[slide-store] stubs fetch failed:", error);
+    }
+    return [];
+  }
+  const rows = (data ?? []) as Omit<StubRow, "requested_by_email">[];
+  const emails = await getOwnerEmails(
+    rows.map((r) => r.requested_by).filter((id): id is string => !!id),
+  );
+  return rows.map((r) => ({
+    ...r,
+    requested_by_email: r.requested_by ? emails[r.requested_by] ?? null : null,
+  }));
+}
+
+// --- Slide flags ("flag for removal") ---------------------------------
+//
+// A flag marks a real slide (by stable 0-based index) for removal, with a
+// reason. Same access pattern as stubs. `flagged_by_email` is resolved for
+// display and is not a stored column.
+export type FlagRow = {
+  id: string;
+  deck_id: string;
+  slide_index: number;
+  reason: string | null;
+  flagged_by: string | null;
+  flagged_by_email: string | null;
+  created_at: string;
+};
+
+export async function getFlagsForDeck(deckId: string): Promise<FlagRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("slide_flags")
+    .select("id, deck_id, slide_index, reason, flagged_by, created_at")
+    .eq("deck_id", deckId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    if (!isMissingTableError(error)) {
+      console.error("[slide-store] flags fetch failed:", error);
+    }
+    return [];
+  }
+  const rows = (data ?? []) as Omit<FlagRow, "flagged_by_email">[];
+  const emails = await getOwnerEmails(
+    rows.map((r) => r.flagged_by).filter((id): id is string => !!id),
+  );
+  return rows.map((r) => ({
+    ...r,
+    flagged_by_email: r.flagged_by ? emails[r.flagged_by] ?? null : null,
+  }));
+}
+
 // Look up auth.users.email for a set of user ids using the admin API.
 // The anon-key Supabase client can't read auth.users, so this has to use
 // service-role. Returns a {user_id → email} map; missing entries mean

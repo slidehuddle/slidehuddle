@@ -108,9 +108,34 @@ security boundaries are.
                 │     parent_id     uuid  → comments(id) (reserved for     │
                 │                          future threaded replies)        │
                 │     body          text  (max 4000 chars)                 │
+                │     element_id    text  (nullable; reserved for future   │
+                │                          element-level comments)         │
                 │     resolved      bool  (reserved for future triage UI)  │
                 │     created_at    timestamptz                            │
                 │     updated_at    timestamptz                            │
+                │                                                          │
+                │   slide_stubs table                                      │
+                │   ─────────────────                                      │
+                │     id            uuid  PK                               │
+                │     deck_id       text  → decks(id)                      │
+                │     position      int   how many real slides precede it  │
+                │     title         text                                   │
+                │     subtitle      text                                   │
+                │     body          text  (what the slide should cover)    │
+                │     requested_by  uuid  → auth.users(id)                 │
+                │     created_at    timestamptz                            │
+                │     (a "requested slide" overlaid on the deck without    │
+                │      modifying the captured HTML)                        │
+                │                                                          │
+                │   slide_flags table                                      │
+                │   ─────────────────                                      │
+                │     id            uuid  PK                               │
+                │     deck_id       text  → decks(id)                      │
+                │     slide_index   int   (0-based, stable real slide)     │
+                │     reason        text                                   │
+                │     flagged_by    uuid  → auth.users(id)                 │
+                │     created_at    timestamptz                            │
+                │     (marks a real slide for removal, with a reason)      │
                 │                                                          │
                 │   RLS: enabled on all tables                             │
                 │     decks:                                               │
@@ -134,6 +159,15 @@ security boundaries are.
                 │     deck_views:                                          │
                 │       authenticated→ SELECT / INSERT / UPDATE only      │
                 │                      rows where auth.uid() = user_id    │
+                │     slide_stubs / slide_flags:                           │
+                │       authenticated→ SELECT / INSERT on a deck you can  │
+                │                      access (own or shared); DELETE     │
+                │                      only your own rows. Anon → denied  │
+                │                      for direct reads, but the viewer    │
+                │                      page reads them server-side with    │
+                │                      the service-role key, so anonymous  │
+                │                      link-viewers still see requested /  │
+                │                      flagged state in the strip.         │
                 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -259,9 +293,9 @@ behaviours based on `source=capture` and whether the user is signed in:
 | State | What the viewer does |
 |---|---|
 | Creator, signed in, deck is orphan (`user_id` is NULL) | Quietly **claims** the deck — sets `user_id = current user`. The deck now appears in their "My decks" on the dashboard. |
-| Creator, signed out | Shows a banner: **"Sign in to save this deck to your dashboard."** The Sign-in button carries a `?next=` back to the same viewer URL, so the claim happens automatically once they finish signing in. |
+| Creator, signed out | The nav's **"Sign in"** link carries a `?next=` back to the same viewer URL **including `source=capture`**, so the claim happens automatically once they finish signing in. (There's no page banner; the only prompts are the nav link and the in-popup "Sign in to…" messages.) |
 | Recipient, signed in, doesn't own the deck | Quietly **records** a row in `shared_decks` (idempotent — repeat visits don't add duplicates). The deck now appears under "Shared with me" on their dashboard. |
-| Recipient, signed out | Shows a banner: **"Sign in to comment and collaborate."** The Sign-in button carries `?next=` back to the viewer; after signing in, the recipient flow kicks in. |
+| Recipient, signed out | The nav's **"Sign in"** link carries `?next=` back to the viewer; after signing in, the recipient flow kicks in. Per-action prompts ("Sign in to comment", "Sign in to request a slide") appear inside the relevant popup/panel. |
 
 A few extra rules to make this safe and sane:
 
@@ -324,8 +358,8 @@ A few extra notes:
 
 ## The `?next=` redirect for "sign in and come back"
 
-When a viewer-page banner sends an unsigned-in user to `/login`, it tags
-the URL with `?next=/viewer?id=…&source=capture` (or the same without
+When the viewer's nav "Sign in" link sends an unsigned-in user to `/login`,
+it tags the URL with `?next=/viewer?id=…&source=capture` (or the same without
 `source` for recipients). That parameter flows through three places:
 
 1. `/login` reads it from `window.location.search` and tacks it onto the
@@ -375,13 +409,25 @@ an open-redirect attack via a crafted magic-link URL.
 | [web/src/app/auth/callback/route.ts](../web/src/app/auth/callback/route.ts) | Magic-link landing route — swaps the one-time code for a session and redirects to `next` (defaults to `/dashboard`). Only relative paths are honoured to prevent open-redirects. |
 | [web/src/app/auth/signout/route.ts](../web/src/app/auth/signout/route.ts) | Sign-out endpoint — clears the session cookies and redirects to `/login` |
 | [web/src/app/dashboard/page.tsx](../web/src/app/dashboard/page.tsx) | "Your decks" page — server-renders two sections: "My decks" (owned) and "Shared with me" (joined via `shared_decks`). |
-| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too). Also runs the creator-claim or recipient-track side-effect and decides which sign-in banner (if any) to show. |
-| [web/src/app/viewer/SlideViewer.tsx](../web/src/app/viewer/SlideViewer.tsx) | The React component that parses and renders slides |
-| [web/src/app/viewer/ShareBar.tsx](../web/src/app/viewer/ShareBar.tsx) | "Copy link" share bar at the top of stored-deck viewer pages. Strips `?source=capture` before copying. |
-| [web/src/app/viewer/SignInBanner.tsx](../web/src/app/viewer/SignInBanner.tsx) | Banner shown above the viewer to signed-out users — different copy for creators vs recipients, with a "Sign in" link that carries `?next=` back to the viewer. |
-| [web/src/app/viewer/CommentsPanel.tsx](../web/src/app/viewer/CommentsPanel.tsx) | Right-side sidebar that lists comments on the current slide and lets the user post one. |
+| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too). Also runs the creator-claim or recipient-track side-effect and builds the `?next=` sign-in link (preserving `source=capture` so the creator-claim flow survives without a banner). |
+| [web/src/app/viewer/SlideViewer.tsx](../web/src/app/viewer/SlideViewer.tsx) | The orchestrator: holds slide/stub/flag/comment state, builds the slide↔stub display sequence, and renders the strip, the edge-to-edge slide stage (overlay arrows + counter, a top-right **Comments pill**, top-left flag menu), the flag overlay, and the comments panel (a flex sibling that shrinks the stage, so the pill is never covered). |
+| [web/src/app/viewer/parse-deck.ts](../web/src/app/viewer/parse-deck.ts) | Pure helpers extracted from SlideViewer: `parseDeck` (splits captured HTML into slides + detects canvas size) and `buildSrcdoc` (wraps a slide for the sandboxed iframe). Shared by the stage and the thumbnails. |
+| [web/src/app/viewer/display-items.ts](../web/src/app/viewer/display-items.ts) | Interleaves real slides with stub slides into one ordered display sequence by stub `position`; `positionForGap` maps an insert gap back to a position. |
+| [web/src/components/TopNav.tsx](../web/src/components/TopNav.tsx) | The **single shared** top nav used by every page (dashboard/home/login via the shell layout, and the viewer). Logo → dashboard/home on the left; the avatar dropdown (or a "Sign in" link) on the right. Self-fetches the signed-in user; an optional `loginHref` lets the viewer carry a `?next=` back to the deck. Change it here, it updates everywhere. |
+| [web/src/components/AvatarMenu.tsx](../web/src/components/AvatarMenu.tsx) | The signed-in avatar (first initial) with a click-to-open dropdown (PortalPopover): the email, a **My decks** link (→ `/dashboard`), and a **Sign out** action that posts to `/auth/signout`. |
+| [web/src/app/viewer/CopyLinkButton.tsx](../web/src/app/viewer/CopyLinkButton.tsx) | "Copy link" deck action (lives in the actions row, with the "Anyone with this link can view" caption beneath it). Copies the viewer URL with `?source=capture` stripped so recipients can't inherit the creator-claim flag. |
+| [web/src/app/viewer/ThumbnailStrip.tsx](../web/src/app/viewer/ThumbnailStrip.tsx) | The **actions** bar (second row): slide miniatures with teal comment-count badges and flag/active indicators, distinct dashed-teal stub thumbnails, hover-to-insert "+" gaps, and — pinned right — Copy link with the share caption beneath. The scrollbar is hidden (`.no-scrollbar`) so many-slide decks scroll without an ugly bar. The Comments toggle is **not** here — it's a pill on the slide stage. |
+| [web/src/components/PortalPopover.tsx](../web/src/components/PortalPopover.tsx) | Renders floating UI (avatar menu, insert form, flag menu, sign-in prompts) into a `document.body` portal with `position: fixed` + high z-index, so popovers escape the strip's scroll-clipping and never paint under the slide iframe. |
+| [web/src/app/viewer/StubSlideView.tsx](../web/src/app/viewer/StubSlideView.tsx) | Dashed-border display for a requested ("stub") slide, shown in the stage in place of the iframe. |
+| [web/src/app/viewer/InsertStubForm.tsx](../web/src/app/viewer/InsertStubForm.tsx) | The form (Title / Subtitle / What should this slide cover) for requesting a stub at a gap; shows a sign-in prompt when signed out. Rendered inside a PortalPopover. |
+| [web/src/app/viewer/SlideFlagControl.tsx](../web/src/app/viewer/SlideFlagControl.tsx) | The "…" menu on a real slide for flagging it for removal (with reason) or removing your own flag. Menu rendered inside a PortalPopover. |
+| [web/src/app/viewer/CommentsPanel.tsx](../web/src/app/viewer/CommentsPanel.tsx) | Right-side panel (~340px, shrinks the stage rather than overlaying) listing the current slide's comments with a composer; shows stub/flag badges and a sign-in gate when signed out. The slide-in animation uses a small, safe offset so the panel is never stranded off-screen if the animation doesn't run. |
+| [web/src/app/(shell)/layout.tsx](../web/src/app/(shell)/layout.tsx) | Layout for the app-shell pages (home, dashboard, login) that render the shared `TopNav`. The viewer renders the same `TopNav` itself (outside this route group) so it can pass its own `loginHref`. |
 | [web/next.config.ts](../web/next.config.ts) | Web app config — security headers live here |
 | [docs/auth-migration.sql](./auth-migration.sql) | One-shot SQL for the new `user_id`/`title`/`slide_count` columns and the `decks_*_own` RLS policies. Idempotent — safe to re-run. |
 | [docs/shared-decks-migration.sql](./shared-decks-migration.sql) | One-shot SQL for the `shared_decks` table, its RLS policies, and the widened `decks_select_own_or_shared` policy. Idempotent — safe to re-run. |
 | [docs/comments-migration.sql](./comments-migration.sql) | One-shot SQL for the `comments` table and its RLS policies. Includes `parent_id` and `resolved` columns reserved for future threading and triage UI. Idempotent — safe to re-run. |
 | [docs/deck-views-migration.sql](./deck-views-migration.sql) | One-shot SQL for the `deck_views` table and its RLS policies. Used by the dashboard to compute unread comment counts. Idempotent — safe to re-run. |
+| [docs/comments-element-id-migration.sql](./comments-element-id-migration.sql) | Adds the nullable `element_id` column to `comments` (reserved for future element-level comments). Idempotent. |
+| [docs/slide-stubs-migration.sql](./slide-stubs-migration.sql) | One-shot SQL for the `slide_stubs` table ("requested slides") and its RLS policies. Idempotent — safe to re-run. |
+| [docs/slide-flags-migration.sql](./slide-flags-migration.sql) | One-shot SQL for the `slide_flags` table ("flag for removal") and its RLS policies. Idempotent — safe to re-run. |

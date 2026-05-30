@@ -25,3 +25,36 @@ body {
   font-family: var(--font-jakarta), -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, sans-serif;
 }
+
+/* Hide the scrollbar while keeping the element scrollable (used by the
+   thumbnail strip — many-slide decks still scroll via wheel/trackpad/drag,
+   but the bar itself never shows). */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome / Safari */
+}
+
+/* Comments panel enter animation (a gentle slide-in from the right).
+   Deliberately a SMALL offset and a non-zero start opacity: the panel is a
+   flex sibling that's always in the layout, so even if this animation never
+   runs (reduced-motion, a throttled/background tab, headless render) the
+   panel stays visible and in place rather than stranded off-screen. */
+@keyframes slideInRight {
+  from {
+    transform: translateX(28px);
+    opacity: 0.3;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[slideInRight_180ms_ease-out\] {
+    animation: none !important;
+  }
+}
