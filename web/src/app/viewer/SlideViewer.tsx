@@ -7,6 +7,7 @@ import StubSlideView from "./StubSlideView";
 import SlideFlagControl from "./SlideFlagControl";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import { buildDisplayItems } from "./display-items";
+import { buildFeedbackPrompt } from "./feedback-prompt";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
 type Props = {
@@ -201,6 +202,17 @@ export default function SlideViewer({
   const canInsert = !!(deckId && currentUserId);
   const canFlag = !!(deckId && currentUserId);
 
+  // AI-loop actions. The feedback prompt aggregates ALL slides' comments,
+  // requested stubs, and removal flags (not just the active slide). Only shown
+  // on stored decks; null when there's nothing to send yet (button disables).
+  const feedbackText = useMemo(
+    () =>
+      isStored
+        ? buildFeedbackPrompt({ comments, flags, stubs })
+        : undefined,
+    [isStored, comments, flags, stubs],
+  );
+
   // ---- Comment actions (unchanged from the previous viewer) ----------
   async function handleAddComment(body: string) {
     if (!deckId || !currentUserId || activeSlideIndex === null) return;
@@ -350,6 +362,7 @@ export default function SlideViewer({
         canInsert={canInsert}
         loginHref={loginHref}
         onInsertStub={handleInsertStub}
+        feedbackText={feedbackText}
       />
 
       <div className="flex-1 flex flex-row min-h-0">

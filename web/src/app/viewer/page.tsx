@@ -1,10 +1,16 @@
+import Link from "next/link";
 import SlideViewer from "./SlideViewer";
 import TopNav from "@/components/TopNav";
+import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
+import UpdatedBanner from "./UpdatedBanner";
 import { SAMPLE_SLIDES_HTML } from "@/lib/sample-slides";
 import {
   claimOrphanDeck,
   getCommentsForDeck,
   getDeckMeta,
+  getDeckVersionHtml,
+  getDeckVersions,
+  getDeckView,
   getFlagsForDeck,
   getStoredSlides,
   getStubsForDeck,
@@ -14,6 +20,8 @@ import {
   type FlagRow,
   type StubRow,
 } from "@/lib/slide-store";
+import { computeUpdateBanner, type VersionStamp } from "./version-banner";
+import { describeChange, summarizeDeckChange } from "./deck-diff";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
 export default async function ViewerPage({
@@ -23,9 +31,10 @@ export default async function ViewerPage({
     slides?: string;
     id?: string;
     source?: string;
+    v?: string;
   }>;
 }) {
-  const { slides, id, source: sourceParam } = await searchParams;
+  const { slides, id, source: sourceParam, v } = await searchParams;
   const isCaptureSource = sourceParam === "capture";
 
   let html: string;
@@ -42,84 +51,157 @@ export default async function ViewerPage({
     source = "sample";
   }
 
-  // Identify the signed-in user once, for every deck source — the viewer
-  // nav shows their avatar regardless of whether the deck is stored, a
-  // sample, or passed inline.
   const supabase = await getSupabaseServer();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Decide what side effects apply for stored decks.
-  // - signed-in creator on orphan deck → claim it
-  // - signed-in recipient (not owner) → record in shared_decks
-  // Signed-out users get no page banner; the only sign-in entry point is the
-  // nav "Sign in" link (and the in-popup "Sign in to…" prompts).
   let currentUserId: string | null = null;
   let currentUserEmail: string | null = user?.email ?? null;
   let initialComments: CommentRow[] = [];
   let initialStubs: StubRow[] = [];
   let initialFlags: FlagRow[] = [];
+  let isOwner = false;
+
+  // Version UI state (stored decks only).
+  let deckTitle: string | null = null;
+  let versionNav: VersionNavItem[] = [];
+  let currentVersion = 1;
+  let viewingVersion = 1;
+  let viewingHistorical = false;
+  let bannerDetail: string | null = null;
 
   if (source === "stored" && id) {
-    // Stubs and flags are read with the service-role client so anonymous
-    // link-viewers still see requested/flagged state in the strip. Load
-    // them in parallel with the deck meta.
-    const [deck, stubs, flags] = await Promise.all([
+    const [deck, stubs, flags, versions] = await Promise.all([
       getDeckMeta(id),
       getStubsForDeck(id),
       getFlagsForDeck(id),
+      getDeckVersions(id),
     ]);
     initialStubs = stubs;
     initialFlags = flags;
-    const isOwner = !!(user && deck && deck.user_id === user.id);
+    isOwner = !!(user && deck && deck.user_id === user.id);
+    deckTitle = deck?.title ?? null;
+    currentVersion = deck?.version ?? 1;
+    viewingVersion = currentVersion;
+
+    versionNav = versions.map((vv) => ({
+      version: vv.version,
+      createdAt: vv.created_at,
+    }));
+
+    // Historical version view: ?v=N for a real, non-current version. Load that
+    // version's stored HTML and present it read-only.
+    const requestedV = v ? parseInt(v, 10) : NaN;
+    if (
+      Number.isFinite(requestedV) &&
+      requestedV >= 1 &&
+      requestedV !== currentVersion
+    ) {
+      const vHtml = await getDeckVersionHtml(id, requestedV);
+      if (vHtml) {
+        html = vHtml;
+        viewingVersion = requestedV;
+        viewingHistorical = true;
+      }
+    }
 
     if (user && deck) {
       if (isCaptureSource && deck.user_id === null) {
         await claimOrphanDeck(id, user.id);
       } else if (!isOwner && deck.user_id !== null) {
-        // Only track a "share" when the deck actually has an owner. Orphan
-        // decks (user_id NULL) belong to no one — nobody shared them — so
-        // they shouldn't show up under "Shared with me".
         await trackSharedDeck(id, user.id);
       }
       currentUserId = user.id;
       currentUserEmail = user.email ?? null;
-      // Load comments after any claim/track has settled, so the user has
-      // access to the deck under the comments RLS.
-      initialComments = await getCommentsForDeck(id, user.id);
-      // Record this view so unread counts on the dashboard advance past
-      // any comments they're seeing right now. Fire-and-forget; if it
-      // fails the worst case is "unread" stays stale until next view.
+
+      // Decide the "updated since you last viewed it" banner BEFORE recording
+      // this view (which advances the timestamp). Current version only.
+      if (!viewingHistorical) {
+        const prior = await getDeckView(id, user.id);
+        const stamps: VersionStamp[] = versions.map((vv) => ({
+          version: vv.version,
+          created_at: vv.created_at,
+        }));
+        const decision = computeUpdateBanner({
+          versions: stamps,
+          currentVersion,
+          lastViewedAt: prior?.last_viewed_at ?? null,
+        });
+        if (decision) {
+          // Build a real change summary by diffing the version they last saw
+          // against the current one (both full snapshots are stored). `html`
+          // here is the current deck HTML (we're not viewing a past version).
+          const oldHtml = await getDeckVersionHtml(id, decision.fromVersion);
+          const change = oldHtml ? summarizeDeckChange(oldHtml, html) : null;
+          bannerDetail = describeChange(
+            decision.fromVersion,
+            decision.toVersion,
+            change,
+          );
+        }
+
+        // Comments only make sense on the current deck.
+        initialComments = await getCommentsForDeck(id, user.id);
+      }
+
       await recordDeckView(id, user.id);
     }
   }
 
-  // Where a signed-out user returns to after using the nav's "Sign in"
-  // link. Built on the server so SSR and client markup agree. Only the
-  // deck id is worth preserving (inline `slides=` HTML would bloat the URL).
-  // We keep `source=capture` so a creator who signs in here still lands back
-  // in the capture flow and claims their orphan deck — the work the old
-  // sign-in banner used to do, now folded into the single nav sign-in link.
+  // Viewing a past version → read-only: pass deckId=null so collaboration
+  // overlays (which track the CURRENT deck and could mis-align on an older
+  // slide set) are hidden.
+  const viewerDeckId =
+    source === "stored" && !viewingHistorical ? id ?? null : null;
+  const viewerStubs = viewingHistorical ? [] : initialStubs;
+  const viewerFlags = viewingHistorical ? [] : initialFlags;
+
   const viewerPath = id
     ? `/viewer?id=${id}${isCaptureSource ? "&source=capture" : ""}`
     : "/viewer";
   const loginHref = `/login?next=${encodeURIComponent(viewerPath)}`;
 
+  const centerSlot =
+    source === "stored" && id ? (
+      <DeckVersionNav
+        deckId={id}
+        title={deckTitle}
+        currentVersion={currentVersion}
+        viewingVersion={viewingVersion}
+        versions={versionNav}
+      />
+    ) : undefined;
+
   return (
     <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      <TopNav loginHref={loginHref} />
+      <TopNav loginHref={loginHref} centerSlot={centerSlot} />
       {source === "sample" && (
         <div className="px-8 py-1.5 text-xs text-muted border-b border-border">
           Viewing sample deck
         </div>
       )}
+      {viewingHistorical && id && (
+        <div className="flex items-center justify-between gap-3 px-8 py-1.5 text-xs border-b border-border bg-[#f6f6fa] text-muted">
+          <span>
+            You&apos;re viewing version {viewingVersion} — a past version of this
+            deck.
+          </span>
+          <Link
+            href={`/viewer?id=${id}`}
+            className="font-semibold text-brand hover:text-brand-hover shrink-0"
+          >
+            Back to current version (v{currentVersion})
+          </Link>
+        </div>
+      )}
+      {bannerDetail && <UpdatedBanner detail={bannerDetail} />}
       <SlideViewer
         rawHtml={html}
-        deckId={source === "stored" ? id ?? null : null}
+        deckId={viewerDeckId}
         initialComments={initialComments}
-        initialStubs={initialStubs}
-        initialFlags={initialFlags}
+        initialStubs={viewerStubs}
+        initialFlags={viewerFlags}
         currentUserId={currentUserId}
         currentUserEmail={currentUserEmail}
         loginHref={loginHref}

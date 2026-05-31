@@ -23,6 +23,24 @@ const INLINE_SLIDE_IFRAME_PATTERNS = [
 
 const isTopFrame = window.top === window;
 
+// chrome.storage key for the conversation→deck map. Deck identity is bound to
+// the Claude conversation it was captured from: { [conversationId]: { deckId,
+// title, writeToken, updatedAt } }. This is how we decide, at capture time,
+// whether the current conversation already has a deck (→ offer Update vs
+// Create) and how we authorise an update (the writeToken). Per-browser; it's
+// where the write token lives, so only the creating browser can update.
+const MAP_KEY = "slidehuddleDeckByConversation";
+
+// A claude.ai conversation lives at https://claude.ai/chat/<uuid> (confirmed
+// with a real URL). The id is a standard 36-char UUID. We read it at CLICK
+// time because claude.ai is a single-page app — the URL changes without a
+// reload, so reading at load time would go stale.
+const CONVERSATION_RE = /\/chat\/([0-9a-fA-F-]{36})\b/;
+function getConversationId() {
+  const m = location.href.match(CONVERSATION_RE);
+  return m ? m[1] : null;
+}
+
 // ============================================================
 // IFRAME MODE — small handler that replies to capture requests
 // from the parent claude.ai page. We can't inject UI here
@@ -164,15 +182,78 @@ function injectAssets() {
       .${BAR_CLASS} button.slidehuddle-error {
         background: #b54a4a;
       }
+      .slidehuddle-choice {
+        position: relative;
+        margin: 2px 0 8px;
+        max-width: 420px;
+        background: #ffffff;
+        border: 1px solid #e4e2f3;
+        border-radius: 12px;
+        box-shadow: 0 12px 32px rgba(74, 63, 181, 0.16);
+        padding: 12px 14px 13px;
+        font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, sans-serif;
+      }
+      .slidehuddle-choice-msg {
+        margin: 0 0 10px;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #2a2a33;
+        padding-right: 18px;
+      }
+      .slidehuddle-choice-msg strong { color: #4A3FB5; font-weight: 600; }
+      .slidehuddle-choice-row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .slidehuddle-choice button {
+        all: unset;
+        cursor: pointer;
+        font-size: 12.5px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 8px 12px;
+        border-radius: 8px;
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+      .slidehuddle-choice-primary { background: #4A3FB5; color: #ffffff; }
+      .slidehuddle-choice-primary:hover { background: #3D339A; }
+      .slidehuddle-choice-secondary {
+        background: #ffffff;
+        color: #4A3FB5;
+        box-shadow: inset 0 0 0 1px #cfcbe9;
+      }
+      .slidehuddle-choice-secondary:hover { background: #f4f3fc; }
+      .slidehuddle-choice-cancel {
+        position: absolute;
+        top: 8px;
+        right: 9px;
+        color: #9b99ad;
+        font-size: 13px !important;
+        padding: 2px 5px !important;
+      }
+      .slidehuddle-choice-cancel:hover { color: #4a4a55; }
     `;
     document.head?.appendChild(style);
   }
 }
 
-async function sendSlides(html) {
-  const response = await fetch(API_ENDPOINT, {
+async function sendSlides(html, opts) {
+  // Two modes:
+  //   opts.update (deck id) + opts.token → save a new version of that deck.
+  //   opts.conversation (id, optional)   → create a new deck, bound to the
+  //                                         Claude conversation it came from.
+  opts = opts || {};
+  let endpoint = API_ENDPOINT;
+  if (opts.update) {
+    endpoint = API_ENDPOINT + "?update=" + encodeURIComponent(opts.update);
+  } else if (opts.conversation) {
+    endpoint = API_ENDPOINT + "?conversation=" + encodeURIComponent(opts.conversation);
+  }
+  const headers = { "Content-Type": "text/html" };
+  if (opts.token) {
+    headers["X-SlideHuddle-Update-Token"] = opts.token;
+  }
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "text/html" },
+    headers,
     body: html,
   });
   if (!response.ok) {
@@ -198,7 +279,9 @@ async function sendSlides(html) {
   if (!data || typeof data.url !== "string") {
     throw new Error("Unexpected response shape");
   }
-  return data.url;
+  // Return the whole payload: callers need url + (for create) writeToken/title
+  // so they can remember the deck against its conversation.
+  return data;
 }
 
 // ---- Cross-frame capture ---------------------------------------------------
@@ -239,6 +322,107 @@ function captureFromIframe(iframe) {
       { __slidehuddle: "capture", requestId },
       "*",
     );
+  });
+}
+
+// ---- Conversation → deck binding -------------------------------------------
+//
+// We remember which SlideHuddle deck each Claude conversation produced, keyed
+// by conversation id, in chrome.storage.local. The stored writeToken is what
+// authorises updating that deck (the extension presents it on ?update=).
+
+function storageGet(key) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(key, (res) => resolve(res ? res[key] : undefined));
+    } catch (err) {
+      console.warn("[SlideHuddle] storage.get failed:", err);
+      resolve(undefined);
+    }
+  });
+}
+
+function storageSet(obj) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set(obj, () => resolve());
+    } catch (err) {
+      console.warn("[SlideHuddle] storage.set failed:", err);
+      resolve();
+    }
+  });
+}
+
+async function getDeckForConversation(conversationId) {
+  if (!conversationId) return null;
+  const map = (await storageGet(MAP_KEY)) || {};
+  const entry = map[conversationId];
+  if (entry && typeof entry.deckId === "string" && typeof entry.writeToken === "string") {
+    return entry;
+  }
+  return null;
+}
+
+async function setDeckForConversation(conversationId, entry) {
+  if (!conversationId) return;
+  const map = (await storageGet(MAP_KEY)) || {};
+  map[conversationId] = { ...entry, updatedAt: Date.now() };
+  await storageSet({ [MAP_KEY]: map });
+}
+
+// ---- Capture-time choice prompt --------------------------------------------
+//
+// Shown only when the current conversation already has a deck. Lets the user
+// decide, with the slides in front of them, whether to update that deck or
+// branch off a separate one. Resolves to "update", "create", or "cancel".
+function showConversationChoice(bar, deckTitle) {
+  return new Promise((resolve) => {
+    // Don't stack prompts.
+    bar.parentElement
+      ?.querySelectorAll(".slidehuddle-choice")
+      .forEach((n) => n.remove());
+
+    const card = document.createElement("div");
+    card.className = "slidehuddle-choice";
+
+    const name = (deckTitle || "Untitled deck").trim();
+    const msg = document.createElement("p");
+    msg.className = "slidehuddle-choice-msg";
+    msg.append("This conversation already has a deck: ");
+    const strong = document.createElement("strong");
+    strong.textContent = "“" + name + "”";
+    msg.append(strong);
+
+    const row = document.createElement("div");
+    row.className = "slidehuddle-choice-row";
+
+    const updateBtn = document.createElement("button");
+    updateBtn.type = "button";
+    updateBtn.className = "slidehuddle-choice-primary";
+    updateBtn.textContent = "Update to new version";
+
+    const createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "slidehuddle-choice-secondary";
+    createBtn.textContent = "Create separate deck";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "slidehuddle-choice-cancel";
+    cancel.setAttribute("aria-label", "Cancel");
+    cancel.textContent = "✕";
+
+    function finish(choice) {
+      card.remove();
+      resolve(choice);
+    }
+    updateBtn.addEventListener("click", () => finish("update"));
+    createBtn.addEventListener("click", () => finish("create"));
+    cancel.addEventListener("click", () => finish("cancel"));
+
+    row.append(updateBtn, createBtn);
+    card.append(cancel, msg, row);
+    bar.insertAdjacentElement("afterend", card);
   });
 }
 
@@ -293,17 +477,71 @@ function createBar(slideType, getHtml) {
       return;
     }
 
-    button.textContent = "Sending…";
+    // Decide create-vs-update from the conversation this capture came from.
+    // If this conversation already produced a deck, ask the user (in context)
+    // whether to update it or branch a separate one. Otherwise just create.
+    const conversationId = getConversationId();
+    const existing = await getDeckForConversation(conversationId);
+
+    let mode = "create"; // "create" | "update"
+    if (existing) {
+      button.textContent = "Choose below…";
+      const choice = await showConversationChoice(bar, existing.title);
+      if (choice === "cancel") {
+        button.textContent = "Open in SlideHuddle";
+        button.disabled = false;
+        return;
+      }
+      mode = choice; // "update" or "create" (= create separate)
+    }
+
+    button.textContent = mode === "update" ? "Updating…" : "Sending…";
 
     try {
-      const url = await sendSlides(html);
-      const captureUrl =
-        url + (url.includes("?") ? "&" : "?") + "source=capture";
-      console.log("[SlideHuddle] Slides posted, opening", captureUrl);
-      window.open(captureUrl, "_blank", "noopener,noreferrer");
-      button.textContent = "Opened ↗";
+      const data =
+        mode === "update"
+          ? await sendSlides(html, {
+              update: existing.deckId,
+              token: existing.writeToken,
+            })
+          : await sendSlides(html, { conversation: conversationId });
+
+      const url = data.url;
+      // New captures carry source=capture so the creator-claim flow runs.
+      // Updates land on the SAME deck — no source marker.
+      const openUrl =
+        mode === "update"
+          ? url
+          : url + (url.includes("?") ? "&" : "?") + "source=capture";
+
+      // Remember the conversation→deck binding for next time.
+      if (mode === "update") {
+        await setDeckForConversation(conversationId, {
+          deckId: existing.deckId,
+          writeToken: existing.writeToken,
+          title:
+            typeof data.title === "string" && data.title
+              ? data.title
+              : existing.title,
+        });
+      } else if (conversationId && typeof data.writeToken === "string") {
+        // Create / "create separate" → (re)bind the conversation to the new
+        // deck so future captures offer to update the one you're working on.
+        await setDeckForConversation(conversationId, {
+          deckId: data.id,
+          writeToken: data.writeToken,
+          title: typeof data.title === "string" ? data.title : null,
+        });
+      }
+
+      console.log(
+        "[SlideHuddle] Slides " + (mode === "update" ? "updated" : "posted") +
+        ", opening", openUrl,
+      );
+      window.open(openUrl, "_blank", "noopener,noreferrer");
+      button.textContent = mode === "update" ? "Updated ↗" : "Opened ↗";
       setTimeout(() => {
-        button.textContent = originalText;
+        button.textContent = "Open in SlideHuddle";
         button.disabled = false;
       }, 2000);
     } catch (err) {
@@ -453,7 +691,16 @@ function detectArtifactSlides() {
     );
 
     if (slideType === "pptx") {
+      // PPTX capture isn't built yet. We keep the detection (and the file-info
+      // logging that will seed that work) but deliberately DON'T inject a
+      // button — a button that fails with "Not supported yet" at click time is
+      // worse than no button. Re-enable injection here once a PPTX capture
+      // path exists (a non-null getHtml for the "pptx" type).
       logPptxFileInfo();
+      console.log(
+        "[SlideHuddle] PPTX detected — button suppressed (capture not built yet)",
+      );
+      return;
     }
 
     const wrapper = block.parentElement;

@@ -6,6 +6,7 @@ import { buildSrcdoc } from "./parse-deck";
 import { type DisplayItem, positionForGap } from "./display-items";
 import InsertStubForm from "./InsertStubForm";
 import CopyLinkButton from "./CopyLinkButton";
+import FeedbackButton from "./FeedbackButton";
 import PortalPopover from "@/components/PortalPopover";
 
 type Props = {
@@ -27,6 +28,9 @@ type Props = {
     position: number,
     fields: { title: string; subtitle: string; body: string },
   ) => Promise<void>;
+  /** Prebuilt "Copy feedback for Claude" prompt; null = nothing to send yet.
+   *  undefined = don't show the button at all (e.g. non-stored decks). */
+  feedbackText?: string | null;
 };
 
 // Uniform thumbnail height keeps the strip tidy; width follows the deck's
@@ -287,6 +291,7 @@ export default function ThumbnailStrip({
   canInsert,
   loginHref,
   onInsertStub,
+  feedbackText,
 }: Props) {
   const [openGap, setOpenGap] = useState<number | null>(null);
 
@@ -457,29 +462,37 @@ export default function ThumbnailStrip({
         )}
       </div>
 
-      {/* Deck actions, pinned to the far right: Copy link with the
-          "anyone with this link can view" caption stacked beneath it. */}
+      {/* Deck actions, pinned to the far right. The AI-loop action (amber)
+          "Copy feedback for Claude" sits to the left of the share action:
+          Copy link (with the "anyone with this link can view" caption stacked
+          beneath it). Updates are now driven from the capture moment in Claude,
+          so there's no "Update this deck" button here. */}
       {showCopyLink && (
-        <div className="flex flex-col items-end justify-center gap-1 pl-3 shrink-0">
-          <CopyLinkButton />
-          <span className="flex items-center gap-1.5 text-[11px] text-muted">
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-            </svg>
-            Anyone with this link can view
-          </span>
+        <div className="flex flex-row items-center justify-center gap-2.5 pl-3 shrink-0">
+          {feedbackText !== undefined && (
+            <FeedbackButton feedbackText={feedbackText} />
+          )}
+          <div className="flex flex-col items-end justify-center gap-1">
+            <CopyLinkButton />
+            <span className="flex items-center gap-1.5 text-[11px] text-muted">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              Anyone with this link can view
+            </span>
+          </div>
         </div>
       )}
     </div>

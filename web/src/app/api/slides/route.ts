@@ -3,8 +3,14 @@ import {
   countSlides,
   dependsOnClaudeDesignSystem,
   storeSlides,
+  updateDeck,
 } from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
+import { mintDeckWriteToken, verifyDeckWriteToken } from "@/lib/update-token";
+
+// Header the extension sends a deck write token in (see lib/update-token.ts).
+// Lower-cased for case-insensitive header lookup.
+const UPDATE_TOKEN_HEADER = "x-slidehuddle-update-token";
 
 // Hard cap on captured slide HTML. Claude decks we've seen are well under
 // 500KB; 2MB leaves comfortable headroom for image-heavy decks while
@@ -46,7 +52,7 @@ function corsHeaders(origin: string | null): HeadersInit {
     "Access-Control-Allow-Origin": origin as string,
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-SlideHuddle-Update-Token",
     "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "86400",
   };
@@ -133,6 +139,54 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const viewerOrigin = request.nextUrl.origin;
+
+  // ---- Update mode -------------------------------------------------------
+  // `?update=<deckId>` saves `html` as the next version of an EXISTING deck
+  // (same id, same share link) instead of creating a new one. The extension
+  // POSTs from claude.ai with no session cookie, so we authorise via a
+  // capability token minted by the viewer for the deck owner — NOT by session.
+  const updateId = request.nextUrl.searchParams.get("update");
+  if (updateId) {
+    const token = request.headers.get(UPDATE_TOKEN_HEADER);
+    if (!verifyDeckWriteToken(token, updateId)) {
+      return NextResponse.json(
+        {
+          error: "Update not authorized",
+          detail:
+            "The deck write token is missing, expired, or not valid for this " +
+            "deck. This deck can only be updated from the browser that created it.",
+        },
+        { status: 403, headers },
+      );
+    }
+    try {
+      const { version, title } = await updateDeck(updateId, html);
+      return NextResponse.json(
+        {
+          id: updateId,
+          url: `${viewerOrigin}/viewer?id=${updateId}`,
+          version,
+          title,
+        },
+        { status: 200, headers },
+      );
+    } catch (err) {
+      console.error("[/api/slides] update failed:", err);
+      const message =
+        err instanceof Error ? err.message : "Failed to update deck";
+      // "Deck not found" is a client problem (stale token / deleted deck);
+      // everything else is treated as a server error.
+      const status = /not found/i.test(message) ? 404 : 500;
+      return NextResponse.json({ error: message }, { status, headers });
+    }
+  }
+
+  // ---- Create mode -------------------------------------------------------
+  // The extension passes the Claude conversation id (claude.ai/chat/<id>) so
+  // the deck is bound to its source conversation.
+  const conversationId = request.nextUrl.searchParams.get("conversation");
+
   // Best-effort auth: if the caller has a SlideHuddle session cookie,
   // attach their user id. Extension POSTs from claude.ai won't have one —
   // those decks stay as orphans (user_id NULL), still viewable by link
@@ -147,8 +201,9 @@ export async function POST(request: NextRequest) {
   }
 
   let id: string;
+  let title: string | null;
   try {
-    id = await storeSlides(html, { userId });
+    ({ id, title } = await storeSlides(html, { userId, conversationId }));
   } catch (err) {
     console.error("[/api/slides] store failed:", err);
     return NextResponse.json(
@@ -160,11 +215,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const viewerOrigin = request.nextUrl.origin;
   const viewerUrl = `${viewerOrigin}/viewer?id=${id}`;
+  // The write token authorises future updates to this deck. The extension
+  // stores it locally against the conversation; only the creating browser
+  // gets it, so only the creator can update.
+  const writeToken = mintDeckWriteToken(id);
 
   return NextResponse.json(
-    { id, url: viewerUrl },
-    { status: 201, headers }
+    {
+      id,
+      url: viewerUrl,
+      version: 1,
+      title,
+      writeToken,
+      conversationId: conversationId ?? null,
+    },
+    { status: 201, headers },
   );
 }
