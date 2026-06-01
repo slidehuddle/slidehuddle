@@ -213,23 +213,36 @@ function injectAssets() {
         border-radius: 8px;
         transition: background 120ms ease, border-color 120ms ease;
       }
-      .slidehuddle-choice-primary { background: #4A3FB5; color: #ffffff; }
-      .slidehuddle-choice-primary:hover { background: #3D339A; }
-      .slidehuddle-choice-secondary {
+      /* Variant selectors are compound (button + class) so they out-specify
+         the base 'all: unset' reset above — otherwise that reset wipes their
+         background/colour and the buttons only appear on hover. */
+      .slidehuddle-choice button.slidehuddle-choice-primary {
+        background: #4A3FB5;
+        color: #ffffff;
+      }
+      .slidehuddle-choice button.slidehuddle-choice-primary:hover {
+        background: #3D339A;
+      }
+      .slidehuddle-choice button.slidehuddle-choice-secondary {
         background: #ffffff;
         color: #4A3FB5;
         box-shadow: inset 0 0 0 1px #cfcbe9;
       }
-      .slidehuddle-choice-secondary:hover { background: #f4f3fc; }
-      .slidehuddle-choice-cancel {
+      .slidehuddle-choice button.slidehuddle-choice-secondary:hover {
+        background: #f4f3fc;
+      }
+      .slidehuddle-choice button.slidehuddle-choice-cancel {
         position: absolute;
         top: 8px;
         right: 9px;
+        background: transparent;
         color: #9b99ad;
-        font-size: 13px !important;
-        padding: 2px 5px !important;
+        font-size: 13px;
+        padding: 2px 5px;
       }
-      .slidehuddle-choice-cancel:hover { color: #4a4a55; }
+      .slidehuddle-choice button.slidehuddle-choice-cancel:hover {
+        color: #4a4a55;
+      }
     `;
     document.head?.appendChild(style);
   }
