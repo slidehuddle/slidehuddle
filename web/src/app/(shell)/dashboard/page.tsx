@@ -31,14 +31,15 @@ function formatDate(iso: string): string {
 }
 
 function deckMeta(deck: DeckRow, dateOverride?: string): string {
+  // The version is shown as a pill on the card (see DeckCard), so it's not
+  // repeated here. slide_count reflects the latest version (it's rewritten on
+  // every update), so this line already describes the current deck.
   const parts: string[] = [formatDate(dateOverride ?? deck.created_at)];
   if (deck.slide_count != null) {
     parts.push(
       `${deck.slide_count} slide${deck.slide_count === 1 ? "" : "s"}`,
     );
   }
-  const version = deck.version ?? 1;
-  if (version > 1) parts.push(`v${version}`);
   return parts.join(" · ");
 }
 
@@ -62,18 +63,45 @@ function DeckCard({
   const accentBase = accent === "brand" ? "bg-brand/30" : "bg-muted/30";
   const accentHover =
     accent === "brand" ? "group-hover:bg-brand" : "group-hover:bg-muted";
+  // More than one version exists → show a version pill and a stacked-card hint.
+  const version = deck.version ?? 1;
+  const hasVersions = version > 1;
   return (
     <li>
-      <Link
-        href={`/viewer?id=${deck.id}`}
-        className="group flex flex-col gap-3 h-full rounded-2xl border border-border p-5 hover:border-brand hover:bg-brand/[0.03] transition-colors"
-      >
-        <span
-          className={`inline-block h-1.5 w-10 rounded-full ${accentBase} ${accentHover} transition-colors`}
-        />
-        <span className="font-semibold text-foreground line-clamp-2 min-h-[3rem] leading-tight">
-          {deck.title || "Untitled deck"}
-        </span>
+      <div className="relative h-full">
+        {/* Stacked-card hint: faint offset card edges behind the real card,
+            signalling that earlier versions sit underneath. Purely decorative. */}
+        {hasVersions && (
+          <>
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-2xl border border-border bg-white translate-x-[10px] translate-y-[10px]"
+            />
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-2xl border border-border bg-white translate-x-[5px] translate-y-[5px]"
+            />
+          </>
+        )}
+        <Link
+          href={`/viewer?id=${deck.id}`}
+          className="group relative z-10 flex flex-col gap-3 h-full rounded-2xl border border-border bg-white p-5 hover:border-brand hover:bg-brand/[0.03] transition-colors"
+        >
+          {/* Latest version available, as a black-on-white pill. */}
+          {hasVersions && (
+            <span
+              aria-label={`Latest version: v${version}`}
+              className="absolute top-4 right-4 inline-flex items-center rounded-full border border-border bg-white px-2 py-0.5 text-[11px] font-bold text-[#1D1D1B] shadow-sm"
+            >
+              v{version}
+            </span>
+          )}
+          <span
+            className={`inline-block h-1.5 w-10 rounded-full ${accentBase} ${accentHover} transition-colors`}
+          />
+          <span className="font-semibold text-foreground line-clamp-2 min-h-[3rem] leading-tight">
+            {deck.title || "Untitled deck"}
+          </span>
         <div className="mt-auto flex flex-col gap-1">
           <span className="text-sm text-muted">{meta}</span>
           {ownerEmail && (
@@ -114,8 +142,9 @@ function DeckCard({
               )}
             </span>
           )}
-        </div>
-      </Link>
+          </div>
+        </Link>
+      </div>
     </li>
   );
 }
