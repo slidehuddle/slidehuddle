@@ -72,7 +72,7 @@ function SlideThumb({
           onClick={onClick}
           aria-label={`Go to slide ${number}`}
           aria-current={active ? "true" : undefined}
-          className="relative block overflow-hidden rounded-md bg-white transition-all"
+          className="relative block overflow-hidden rounded-md bg-white transition-all hover:shadow-md"
           style={{
             width: w,
             height: THUMB_H,
@@ -167,12 +167,12 @@ function StubThumb({
         onClick={onClick}
         aria-label={`Go to requested slide: ${label}`}
         aria-current={active ? "true" : undefined}
-        className="flex items-center justify-center rounded-md px-1.5 transition-all overflow-hidden"
+        className="flex items-center justify-center rounded-md px-1.5 transition-all overflow-hidden hover:shadow-md"
         style={{
           width: w,
           height: THUMB_H,
-          border: active ? "2px solid #4A3FB5" : "1.5px dashed #5DCAA5",
-          backgroundColor: "rgba(93,202,165,0.06)",
+          border: active ? "2px solid #4A3FB5" : "1.5px solid #5DCAA5",
+          backgroundColor: "transparent",
           color: "#0F6E56",
         }}
       >
@@ -462,37 +462,18 @@ export default function ThumbnailStrip({
         )}
       </div>
 
-      {/* Deck actions, pinned to the far right. The AI-loop action (amber)
-          "Copy feedback for Claude" sits to the left of the share action:
-          Copy link (with the "anyone with this link can view" caption stacked
-          beneath it). Updates are now driven from the capture moment in Claude,
-          so there's no "Update this deck" button here. */}
+      {/* Deck actions, pinned to the far right. Copy link (the share action)
+          comes first; the AI-loop action (amber when there's feedback to send,
+          muted otherwise) sits to its right. The "anyone with this link can
+          view" status appears transiently in a toast under Copy link rather
+          than as a resting caption. Updates are driven from the capture moment
+          in Claude, so there's no "Update this deck" button here. */}
       {showCopyLink && (
         <div className="flex flex-row items-center justify-center gap-2.5 pl-3 shrink-0">
+          <CopyLinkButton />
           {feedbackText !== undefined && (
             <FeedbackButton feedbackText={feedbackText} />
           )}
-          <div className="flex flex-col items-end justify-center gap-1">
-            <CopyLinkButton />
-            <span className="flex items-center gap-1.5 text-[11px] text-muted">
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-              </svg>
-              Anyone with this link can view
-            </span>
-          </div>
         </div>
       )}
     </div>

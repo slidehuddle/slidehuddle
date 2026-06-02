@@ -204,6 +204,7 @@ export default async function ViewerPage({
         initialFlags={viewerFlags}
         currentUserId={currentUserId}
         currentUserEmail={currentUserEmail}
+        isOwner={isOwner}
         loginHref={loginHref}
       />
     </main>

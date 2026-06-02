@@ -8,6 +8,7 @@ import SlideFlagControl from "./SlideFlagControl";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt } from "./feedback-prompt";
+import { deleteStubAction } from "./actions";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
 type Props = {
@@ -18,6 +19,8 @@ type Props = {
   initialFlags: FlagRow[];
   currentUserId: string | null;
   currentUserEmail: string | null;
+  /** Whether the signed-in user owns this deck (may delete any stub). */
+  isOwner: boolean;
   loginHref: string;
 };
 
@@ -29,6 +32,7 @@ export default function SlideViewer({
   initialFlags,
   currentUserId,
   currentUserEmail,
+  isOwner,
   loginHref,
 }: Props) {
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
@@ -294,6 +298,22 @@ export default function SlideViewer({
     setFocusStubId(row.id);
   }
 
+  // Delete a requested stub outright (requester or deck owner only — enforced
+  // server-side in the action). Optimistic: drop it from local state, then call
+  // the action; restore on failure. The display list recomputes from `stubs`,
+  // so the deck and thumbnail strip reflow automatically, and safeIndex clamps
+  // if the deleted stub was the active item.
+  async function handleDeleteStub(stubId: string) {
+    if (!deckId) return;
+    const snapshot = stubs;
+    setStubs((prev) => prev.filter((s) => s.id !== stubId));
+    const res = await deleteStubAction(deckId, stubId);
+    if (!res.ok) {
+      console.error("[SlideViewer] stub delete failed:", res.error);
+      setStubs(snapshot);
+    }
+  }
+
   // ---- Flag actions --------------------------------------------------
   async function handleFlag(reason: string) {
     if (!deckId || !currentUserId || activeSlideIndex === null) return;
@@ -381,7 +401,12 @@ export default function SlideViewer({
                 height: cardSize.height ? `${cardSize.height}px` : undefined,
               }}
             >
-              <StubSlideView stub={activeStub} />
+              <StubSlideView
+                stub={activeStub}
+                currentUserId={currentUserId}
+                isOwner={isOwner}
+                onDelete={handleDeleteStub}
+              />
             </div>
           ) : (
             <div

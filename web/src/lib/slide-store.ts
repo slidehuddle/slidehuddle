@@ -713,6 +713,64 @@ export async function getStubsForDeck(deckId: string): Promise<StubRow[]> {
   }));
 }
 
+export type DeleteStubResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "forbidden" | "error" };
+
+// Delete a requested (stub) slide outright (stubs have no real content, so
+// there's nothing to regenerate — removal is immediate, not a "flag").
+// Permitted for the person who requested it OR the deck owner. We enforce this
+// here with the service-role client because the owner deleting *someone else's*
+// stub is beyond what the browser RLS policy allows. The caller is responsible
+// for passing the authenticated user's id (see the server action).
+export async function deleteStub(
+  deckId: string,
+  stubId: string,
+  userId: string,
+): Promise<DeleteStubResult> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: stub, error: readErr } = await supabase
+    .from("slide_stubs")
+    .select("id, deck_id, requested_by")
+    .eq("id", stubId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] stub read failed:", readErr);
+    return { ok: false, reason: "error" };
+  }
+  // Guard against a stub id from a different deck (deckId comes from the client).
+  if (!stub || stub.deck_id !== deckId) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const { data: deck, error: deckErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (deckErr) {
+    console.error("[slide-store] deck read failed:", deckErr);
+    return { ok: false, reason: "error" };
+  }
+
+  const isRequester = !!stub.requested_by && stub.requested_by === userId;
+  const isOwner = !!deck && deck.user_id === userId;
+  if (!isRequester && !isOwner) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  const { error: delErr } = await supabase
+    .from("slide_stubs")
+    .delete()
+    .eq("id", stubId);
+  if (delErr) {
+    console.error("[slide-store] stub delete failed:", delErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
+}
+
 // --- Slide flags ("flag for removal") ---------------------------------
 //
 // A flag marks a real slide (by stable 0-based index) for removal, with a

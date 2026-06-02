@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import PortalPopover from "@/components/PortalPopover";
 
-const TEAL_BG = "#E1F5EE";
-const TEAL_TEXT = "#085041";
+// Version accent — purple (green is reserved for user feedback).
+const PURPLE_BG = "#ECE9F9";
+const PURPLE_TEXT = "#3A2E8F";
 
 export type VersionNavItem = {
   version: number;
@@ -64,7 +65,7 @@ export default function DeckVersionNav({
         aria-expanded={open}
         aria-label={`Version ${currentVersion} — view version history`}
         className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold shrink-0 transition-opacity hover:opacity-80"
-        style={{ backgroundColor: TEAL_BG, color: TEAL_TEXT }}
+        style={{ backgroundColor: PURPLE_BG, color: PURPLE_TEXT }}
       >
         {`v${currentVersion}`}
       </button>
@@ -94,13 +95,13 @@ export default function DeckVersionNav({
                 <li key={v.version}>
                   <div
                     className="flex items-center gap-3 px-3.5 py-2"
-                    style={isCurrent ? { backgroundColor: TEAL_BG } : undefined}
+                    style={isCurrent ? { backgroundColor: PURPLE_BG } : undefined}
                   >
                     <span
                       className="inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-xs font-bold shrink-0"
                       style={
                         isCurrent
-                          ? { backgroundColor: "#ffffff", color: TEAL_TEXT }
+                          ? { backgroundColor: "#ffffff", color: PURPLE_TEXT }
                           : { backgroundColor: "#f0eff7", color: "#4A3FB5" }
                       }
                     >
@@ -109,7 +110,7 @@ export default function DeckVersionNav({
                     <div className="flex flex-col min-w-0 flex-1">
                       <span
                         className="text-xs font-medium truncate"
-                        style={isCurrent ? { color: TEAL_TEXT } : { color: "#2a2a33" }}
+                        style={isCurrent ? { color: PURPLE_TEXT } : { color: "#2a2a33" }}
                       >
                         {isCurrent ? "Current version" : `Version ${v.version}`}
                         {isViewing && !isCurrent && (
@@ -124,7 +125,7 @@ export default function DeckVersionNav({
                       viewingVersion === currentVersion ? (
                         <span
                           className="text-[11px] font-semibold shrink-0"
-                          style={{ color: TEAL_TEXT }}
+                          style={{ color: PURPLE_TEXT }}
                         >
                           current
                         </span>
