@@ -11,6 +11,13 @@ import { buildFeedbackPrompt } from "./feedback-prompt";
 import { deleteStubAction } from "./actions";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
+// "a, b, and c" — for the load-error banner's list of failed datasets.
+function joinWithAnd(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
 type Props = {
   rawHtml: string;
   deckId: string | null;
@@ -21,6 +28,15 @@ type Props = {
   currentUserEmail: string | null;
   /** Whether the signed-in user owns this deck (may delete any stub). */
   isOwner: boolean;
+  /** Which collaboration datasets FAILED to load (real error, not empty). */
+  loadErrors?: {
+    comments: boolean;
+    stubs: boolean;
+    flags: boolean;
+    versions: boolean;
+  };
+  /** True when loading the deck's own HTML errored (vs. an empty/missing deck). */
+  deckLoadFailed?: boolean;
   loginHref: string;
 };
 
@@ -33,6 +49,8 @@ export default function SlideViewer({
   currentUserId,
   currentUserEmail,
   isOwner,
+  loadErrors,
+  deckLoadFailed,
   loginHref,
 }: Props) {
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
@@ -355,6 +373,40 @@ export default function SlideViewer({
     }
   }
 
+  // A real failure loading the deck's HTML takes precedence over everything —
+  // even if requested-slide stubs exist, showing them alone would misleadingly
+  // imply the deck loaded fine. (deck.slides is empty when the load errored;
+  // a historical-version fallback that succeeded would have populated it.)
+  if (deckLoadFailed && deck.slides.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div
+          role="alert"
+          className="flex items-center gap-2.5 rounded-lg px-4 py-3 text-sm font-medium"
+          style={{ backgroundColor: "#FEF3F2", color: "#791F1F" }}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="shrink-0"
+          >
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          Couldn&apos;t load this deck — try refreshing.
+        </div>
+      </div>
+    );
+  }
+
   if (!hasItems) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted">
@@ -368,8 +420,49 @@ export default function SlideViewer({
       ? `${safeIndex + 1} / ${displayItems.length} · requested slide`
       : `${safeIndex + 1} / ${displayItems.length}`;
 
+  // Surface real load failures (table missing / query failed) so a broken
+  // fetch doesn't masquerade as "no comments / no requested slides".
+  const failedDatasets: string[] = [];
+  if (loadErrors?.comments) failedDatasets.push("comments");
+  if (loadErrors?.stubs) failedDatasets.push("requested slides");
+  if (loadErrors?.flags) failedDatasets.push("removal flags");
+  if (loadErrors?.versions) failedDatasets.push("version history");
+  const loadErrorMessage =
+    failedDatasets.length > 0
+      ? `Couldn't load ${joinWithAnd(failedDatasets)} — try refreshing.`
+      : null;
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      {loadErrorMessage && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 px-4 py-2 text-[13px] font-medium border-b"
+          style={{
+            backgroundColor: "#FEF3F2",
+            color: "#791F1F",
+            borderColor: "#FECDCA",
+          }}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="shrink-0"
+          >
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          {loadErrorMessage}
+        </div>
+      )}
       <ThumbnailStrip
         deck={deck}
         items={displayItems}

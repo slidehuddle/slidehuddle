@@ -84,6 +84,14 @@ export function countSlides(html: string): number | null {
   return sectionCount > 0 ? sectionCount : null;
 }
 
+// Result of a collection fetch. We must NOT conflate a genuine empty result
+// (the query worked, there's just no data) with a real failure (the table is
+// missing because a migration never ran, the query errored, permission was
+// denied, …). `rows` is always present (empty on failure, so callers can still
+// render), and `failed` lets the UI show a "couldn't load" indicator instead of
+// silently pretending there's no data.
+export type ListLoad<T> = { rows: T[]; failed: boolean };
+
 export type StoreSlidesOptions = {
   userId?: string | null;
   /** Claude conversation the deck was captured from (claude.ai/chat/<id>). */
@@ -276,7 +284,7 @@ export type DeckVersionRow = {
 // payload. For the future history UI. Returns [] if the table is missing.
 export async function getDeckVersions(
   deckId: string,
-): Promise<DeckVersionRow[]> {
+): Promise<ListLoad<DeckVersionRow>> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("deck_versions")
@@ -284,15 +292,20 @@ export async function getDeckVersions(
     .eq("deck_id", deckId)
     .order("version", { ascending: false });
   if (error) {
-    if (!isMissingTableError(error)) {
-      console.error("[slide-store] versions fetch failed:", error);
-    }
-    return [];
+    logDbError("versions fetch failed", error);
+    return { rows: [], failed: true };
   }
-  return (data ?? []) as DeckVersionRow[];
+  return { rows: (data ?? []) as DeckVersionRow[], failed: false };
 }
 
-export async function getStoredSlides(id: string): Promise<string | null> {
+// Load a deck's stored HTML. Distinguishes three cases so the viewer can tell a
+// real failure apart from a deck that simply isn't there:
+//   { html: "<…>", failed: false }  → found
+//   { html: null,  failed: false }  → genuinely not found (no such deck)
+//   { html: null,  failed: true  }  → the query errored (don't show "empty")
+export async function getStoredSlides(
+  id: string,
+): Promise<{ html: string | null; failed: boolean }> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("decks")
@@ -300,10 +313,10 @@ export async function getStoredSlides(id: string): Promise<string | null> {
     .eq("id", id)
     .maybeSingle();
   if (error) {
-    console.error("[slide-store] fetch failed:", error);
-    return null;
+    logDbError("deck html fetch failed", error);
+    return { html: null, failed: true };
   }
-  return data?.html_content ?? null;
+  return { html: data?.html_content ?? null, failed: false };
 }
 
 export type DeckMeta = {
@@ -324,7 +337,7 @@ export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
     .eq("id", id)
     .maybeSingle();
   if (error) {
-    console.error("[slide-store] meta fetch failed:", error);
+    logDbError("deck meta fetch failed", error);
     return null;
   }
   if (!data) return null;
@@ -362,9 +375,7 @@ export async function getDeckVersionHtml(
     .eq("version", version)
     .maybeSingle();
   if (error) {
-    if (!isMissingTableError(error)) {
-      console.error("[slide-store] version html fetch failed:", error);
-    }
+    logDbError("version html fetch failed", error);
     return null;
   }
   return data?.html_content ?? null;
@@ -385,9 +396,7 @@ export async function getDeckView(
     .eq("user_id", userId)
     .maybeSingle();
   if (error) {
-    if (!isMissingTableError(error)) {
-      console.error("[slide-store] deck view fetch failed:", error);
-    }
+    logDbError("deck view fetch failed", error);
     return null;
   }
   return data ? { last_viewed_at: data.last_viewed_at ?? null } : null;
@@ -539,11 +548,16 @@ export async function recordDeckView(
 //   - we also want to count comments by *other* users, and a single
 //     admin query over both deck_views and comments is simpler and
 //     cheaper than two RLS-scoped queries.
+export type DeckCommentCounts = {
+  counts: Record<string, { total: number; unread: number }>;
+  failed: boolean;
+};
+
 export async function getDeckCommentCountsForUser(
   deckIds: string[],
   userId: string,
-): Promise<Record<string, { total: number; unread: number }>> {
-  if (deckIds.length === 0) return {};
+): Promise<DeckCommentCounts> {
+  if (deckIds.length === 0) return { counts: {}, failed: false };
   const supabase = getSupabaseAdmin();
   const [viewsRes, commentsRes] = await Promise.all([
     supabase
@@ -556,18 +570,14 @@ export async function getDeckCommentCountsForUser(
       .select("deck_id, created_at")
       .in("deck_id", deckIds),
   ]);
-  if (viewsRes.error) {
-    console.error(
-      "[slide-store] deck_views fetch failed:",
-      viewsRes.error,
-    );
-  }
+  // The comments query is what drives the counts; a deck_views failure only
+  // affects read/unread accuracy. Treat either as a real load failure so the
+  // dashboard can warn rather than silently show "no comments".
+  if (viewsRes.error) logDbError("deck_views fetch failed", viewsRes.error);
   if (commentsRes.error) {
-    console.error(
-      "[slide-store] comment counts fetch failed:",
-      commentsRes.error,
-    );
+    logDbError("comment counts fetch failed", commentsRes.error);
   }
+  const failed = !!viewsRes.error || !!commentsRes.error;
   const lastViewed: Record<string, string> = {};
   for (const v of (viewsRes.data ?? []) as {
     deck_id: string;
@@ -586,7 +596,7 @@ export async function getDeckCommentCountsForUser(
     const last = lastViewed[c.deck_id];
     if (!last || c.created_at > last) entry.unread++;
   }
-  return counts;
+  return { counts, failed };
 }
 
 export type CommentRow = {
@@ -607,8 +617,9 @@ export type CommentRow = {
 export async function getCommentsForDeck(
   deckId: string,
   userId: string | null,
-): Promise<CommentRow[]> {
-  if (!userId) return [];
+): Promise<ListLoad<CommentRow>> {
+  // No signed-in user / no access are legitimate empty states, not failures.
+  if (!userId) return { rows: [], failed: false };
   const supabase = getSupabaseAdmin();
   // Double-check access: own the deck OR have a shared_decks row. This
   // mirrors the comments RLS but is enforced explicitly here because we're
@@ -627,7 +638,7 @@ export async function getCommentsForDeck(
       .eq("user_id", userId)
       .maybeSingle(),
   ]);
-  if (!ownsDeck && !hasShare) return [];
+  if (!ownsDeck && !hasShare) return { rows: [], failed: false };
 
   const { data, error } = await supabase
     .from("comments")
@@ -636,16 +647,51 @@ export async function getCommentsForDeck(
     .order("slide_index", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) {
-    console.error("[slide-store] comments fetch failed:", error);
-    return [];
+    logDbError("comments fetch failed", error);
+    return { rows: [], failed: true };
   }
-  return (data ?? []) as CommentRow[];
+  return { rows: (data ?? []) as CommentRow[], failed: false };
+}
+
+type DbError = {
+  code?: string;
+  message?: string;
+  details?: string;
+  hint?: string;
+} | null;
+
+// Render a Supabase/Postgres error into a single readable log line (code +
+// message + hint), so a real failure is legible in the server logs rather than
+// "[object Object]".
+function describeDbError(error: DbError): string {
+  if (!error) return "unknown error";
+  const parts: string[] = [];
+  if (error.code) parts.push(`code=${error.code}`);
+  if (error.message) parts.push(error.message);
+  if (error.details) parts.push(`details: ${error.details}`);
+  if (error.hint) parts.push(`hint: ${error.hint}`);
+  return parts.join(" | ") || "unknown error";
+}
+
+// Log a data-fetch failure loudly and clearly. A missing table is the classic
+// "a migration never got run" case the empty-vs-error distinction is meant to
+// catch, so we call that out explicitly instead of letting it look routine.
+function logDbError(context: string, error: DbError): void {
+  if (isMissingTableError(error)) {
+    console.error(
+      `[slide-store] ${context}: database table is missing — a required ` +
+        `migration likely hasn't been run. ${describeDbError(error)}`,
+    );
+  } else {
+    console.error(`[slide-store] ${context}: ${describeDbError(error)}`);
+  }
 }
 
 // A Supabase error that just means "this table hasn't been created yet"
-// (the migration hasn't been run). We treat that as an expected empty
-// result rather than a real error, so it doesn't spam the server console
-// or surface as a Next.js dev-overlay issue before the migrations land.
+// (the migration hasn't been run). Historically we swallowed this as an
+// expected empty result; we now surface it as a real failure (see logDbError /
+// the ListLoad `failed` flag) because a never-run migration must not look
+// identical to "no data yet".
 function isMissingTableError(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
   // PGRST205 = PostgREST "table not found in schema cache";
@@ -687,7 +733,9 @@ export type StubRow = {
   created_at: string;
 };
 
-export async function getStubsForDeck(deckId: string): Promise<StubRow[]> {
+export async function getStubsForDeck(
+  deckId: string,
+): Promise<ListLoad<StubRow>> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("slide_stubs")
@@ -696,21 +744,22 @@ export async function getStubsForDeck(deckId: string): Promise<StubRow[]> {
     .order("position", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) {
-    // Pre-migration the table may not exist yet; that's an expected empty
-    // result, not an error worth logging. Log anything else.
-    if (!isMissingTableError(error)) {
-      console.error("[slide-store] stubs fetch failed:", error);
-    }
-    return [];
+    // Any error here — including a missing slide_stubs table (migration not
+    // run) — is a real failure. Surface it instead of returning a fake empty.
+    logDbError("stubs fetch failed", error);
+    return { rows: [], failed: true };
   }
   const rows = (data ?? []) as Omit<StubRow, "requested_by_email">[];
   const emails = await getOwnerEmails(
     rows.map((r) => r.requested_by).filter((id): id is string => !!id),
   );
-  return rows.map((r) => ({
-    ...r,
-    requested_by_email: r.requested_by ? emails[r.requested_by] ?? null : null,
-  }));
+  return {
+    rows: rows.map((r) => ({
+      ...r,
+      requested_by_email: r.requested_by ? emails[r.requested_by] ?? null : null,
+    })),
+    failed: false,
+  };
 }
 
 export type DeleteStubResult =
@@ -786,7 +835,9 @@ export type FlagRow = {
   created_at: string;
 };
 
-export async function getFlagsForDeck(deckId: string): Promise<FlagRow[]> {
+export async function getFlagsForDeck(
+  deckId: string,
+): Promise<ListLoad<FlagRow>> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("slide_flags")
@@ -794,19 +845,22 @@ export async function getFlagsForDeck(deckId: string): Promise<FlagRow[]> {
     .eq("deck_id", deckId)
     .order("created_at", { ascending: true });
   if (error) {
-    if (!isMissingTableError(error)) {
-      console.error("[slide-store] flags fetch failed:", error);
-    }
-    return [];
+    // Any error here — including a missing slide_flags table (migration not
+    // run) — is a real failure, not "no flags".
+    logDbError("flags fetch failed", error);
+    return { rows: [], failed: true };
   }
   const rows = (data ?? []) as Omit<FlagRow, "flagged_by_email">[];
   const emails = await getOwnerEmails(
     rows.map((r) => r.flagged_by).filter((id): id is string => !!id),
   );
-  return rows.map((r) => ({
-    ...r,
-    flagged_by_email: r.flagged_by ? emails[r.flagged_by] ?? null : null,
-  }));
+  return {
+    rows: rows.map((r) => ({
+      ...r,
+      flagged_by_email: r.flagged_by ? emails[r.flagged_by] ?? null : null,
+    })),
+    failed: false,
+  };
 }
 
 // Look up auth.users.email for a set of user ids using the admin API.

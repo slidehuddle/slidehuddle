@@ -177,12 +177,16 @@ export default async function DashboardPage() {
     ...ownDecks.map((d) => d.id),
     ...sharedRows.map((r) => r.deck!.id),
   ];
-  const [shareCountByDeck, emailByOwnerId, commentCountsByDeck] =
+  const [shareCountByDeck, emailByOwnerId, commentCountsResult] =
     await Promise.all([
       getDeckShareCounts(allDeckIds),
       getOwnerEmails(ownerIdsForShared),
       getDeckCommentCountsForUser(allDeckIds, user.id),
     ]);
+  const commentCountsByDeck = commentCountsResult.counts;
+  // A real failure loading comment counts — show a notice rather than letting
+  // every deck silently read as "0 comments".
+  const commentCountsFailed = commentCountsResult.failed;
 
   const bothEmpty = ownDecks.length === 0 && sharedRows.length === 0;
 
@@ -197,6 +201,32 @@ export default async function DashboardPage() {
             Decks you&apos;ve captured from Claude with the SlideHuddle extension,
             plus decks others have shared with you.
           </p>
+          {commentCountsFailed && (
+            <div
+              role="alert"
+              className="mt-1 inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-[13px] font-medium"
+              style={{ backgroundColor: "#FEF3F2", color: "#791F1F" }}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0"
+              >
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              Couldn&apos;t load comment activity — counts may be missing. Try
+              refreshing.
+            </div>
+          )}
         </div>
 
         {bothEmpty ? (

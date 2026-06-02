@@ -39,12 +39,18 @@ export default async function ViewerPage({
 
   let html: string;
   let source: "param" | "stored" | "sample";
+  // True only when loading the deck's HTML actually errored (vs. the deck not
+  // existing, or having no slides) — lets the viewer show a distinct "couldn't
+  // load this deck" message rather than the generic empty state.
+  let deckLoadFailed = false;
 
   if (slides) {
     html = slides;
     source = "param";
   } else if (id) {
-    html = (await getStoredSlides(id)) ?? "";
+    const slidesLoad = await getStoredSlides(id);
+    html = slidesLoad.html ?? "";
+    deckLoadFailed = slidesLoad.failed;
     source = "stored";
   } else {
     html = SAMPLE_SLIDES_HTML;
@@ -63,6 +69,17 @@ export default async function ViewerPage({
   let initialFlags: FlagRow[] = [];
   let isOwner = false;
 
+  // Whether each collaboration dataset FAILED to load (a real error — table
+  // missing, query failed, permission denied — not a genuine empty result).
+  // Passed to the viewer so it can show a "couldn't load" indicator instead of
+  // silently rendering an empty state. Default false = nothing went wrong.
+  const loadErrors = {
+    comments: false,
+    stubs: false,
+    flags: false,
+    versions: false,
+  };
+
   // Version UI state (stored decks only).
   let deckTitle: string | null = null;
   let versionNav: VersionNavItem[] = [];
@@ -72,14 +89,18 @@ export default async function ViewerPage({
   let bannerDetail: string | null = null;
 
   if (source === "stored" && id) {
-    const [deck, stubs, flags, versions] = await Promise.all([
+    const [deck, stubsLoad, flagsLoad, versionsLoad] = await Promise.all([
       getDeckMeta(id),
       getStubsForDeck(id),
       getFlagsForDeck(id),
       getDeckVersions(id),
     ]);
-    initialStubs = stubs;
-    initialFlags = flags;
+    initialStubs = stubsLoad.rows;
+    initialFlags = flagsLoad.rows;
+    loadErrors.stubs = stubsLoad.failed;
+    loadErrors.flags = flagsLoad.failed;
+    loadErrors.versions = versionsLoad.failed;
+    const versions = versionsLoad.rows;
     isOwner = !!(user && deck && deck.user_id === user.id);
     deckTitle = deck?.title ?? null;
     currentVersion = deck?.version ?? 1;
@@ -142,7 +163,9 @@ export default async function ViewerPage({
         }
 
         // Comments only make sense on the current deck.
-        initialComments = await getCommentsForDeck(id, user.id);
+        const commentsLoad = await getCommentsForDeck(id, user.id);
+        initialComments = commentsLoad.rows;
+        loadErrors.comments = commentsLoad.failed;
       }
 
       await recordDeckView(id, user.id);
@@ -205,6 +228,8 @@ export default async function ViewerPage({
         currentUserId={currentUserId}
         currentUserEmail={currentUserEmail}
         isOwner={isOwner}
+        loadErrors={loadErrors}
+        deckLoadFailed={deckLoadFailed}
         loginHref={loginHref}
       />
     </main>
