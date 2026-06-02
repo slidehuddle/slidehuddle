@@ -7,6 +7,7 @@ import PortalPopover from "@/components/PortalPopover";
 // Version accent — purple (green is reserved for user feedback).
 const PURPLE_BG = "#ECE9F9";
 const PURPLE_TEXT = "#3A2E8F";
+const WARN_RED = "#B42318";
 
 export type VersionNavItem = {
   version: number;
@@ -16,7 +17,7 @@ export type VersionNavItem = {
 type Props = {
   deckId: string;
   title: string | null;
-  /** Latest version number — the chip always shows this. */
+  /** Latest version number. */
   currentVersion: number;
   /** Version currently being viewed (== current unless browsing history). */
   viewingVersion: number;
@@ -51,8 +52,14 @@ export default function DeckVersionNav({
     : [{ version: currentVersion, createdAt: "" }, ...versions];
   const ordered = [...rows].sort((a, b) => b.version - a.version);
 
+  // There's something to choose from only when more than one version exists.
+  const hasChoices = ordered.length > 1;
+  // The user is browsing a past version (not the latest).
+  const viewingOlder = viewingVersion !== currentVersion;
+  const olderWarning = `You're viewing an older version (v${viewingVersion}). The latest is v${currentVersion}.`;
+
   return (
-    <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-center gap-1.5 min-w-0">
       {title && (
         <span className="text-sm font-semibold text-foreground truncate max-w-[40vw]">
           {title}
@@ -63,12 +70,73 @@ export default function DeckVersionNav({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`Version ${currentVersion} — view version history`}
-        className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold shrink-0 transition-opacity hover:opacity-80"
-        style={{ backgroundColor: PURPLE_BG, color: PURPLE_TEXT }}
+        aria-label={
+          viewingOlder
+            ? `Version ${viewingVersion} (older than the latest, v${currentVersion}) — view version history`
+            : `Version ${viewingVersion} — view version history`
+        }
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold shrink-0 transition-opacity hover:opacity-80"
+        style={
+          viewingOlder
+            ? // older version selected → black on white (with a hairline ring)
+              {
+                backgroundColor: "#ffffff",
+                color: "#1D1D1B",
+                boxShadow: "inset 0 0 0 1px #d9d9e3",
+              }
+            : { backgroundColor: PURPLE_BG, color: PURPLE_TEXT }
+        }
       >
-        {`v${currentVersion}`}
+        {`v${viewingVersion}`}
+        {hasChoices && (
+          // small down-triangle: more versions are available to choose from
+          <svg
+            width="8"
+            height="8"
+            viewBox="0 0 10 10"
+            fill="currentColor"
+            aria-hidden="true"
+            className="opacity-70"
+          >
+            <path d="M1 3l4 4 4-4z" />
+          </svg>
+        )}
       </button>
+
+      {/* Red warning triangle (white "!" inside) when viewing an older version. */}
+      {viewingOlder && (
+        <span
+          title={olderWarning}
+          aria-label={olderWarning}
+          role="img"
+          className="inline-flex items-center shrink-0 cursor-help"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              fill={WARN_RED}
+            />
+            <line
+              x1="12"
+              y1="9"
+              x2="12"
+              y2="13.5"
+              stroke="#ffffff"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <line
+              x1="12"
+              y1="17"
+              x2="12.01"
+              y2="17"
+              stroke="#ffffff"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </span>
+      )}
 
       <PortalPopover
         anchorRef={chipRef}
@@ -93,14 +161,25 @@ export default function DeckVersionNav({
               const isViewing = v.version === viewingVersion;
               return (
                 <li key={v.version}>
-                  <div
-                    className="flex items-center gap-3 px-3.5 py-2"
-                    style={isCurrent ? { backgroundColor: PURPLE_BG } : undefined}
+                  {/* Whole row is the click target — selecting it brings up that
+                      version (not just a small "view" link). Hover previews the
+                      row you're about to select; the row you're currently
+                      viewing stays highlighted in purple. */}
+                  <Link
+                    href={
+                      isCurrent
+                        ? `/viewer?id=${deckId}`
+                        : `/viewer?id=${deckId}&v=${v.version}`
+                    }
+                    onClick={() => setOpen(false)}
+                    aria-current={isViewing ? "true" : undefined}
+                    className="flex items-center gap-3 px-3.5 py-2 transition-colors hover:bg-black/[0.04]"
+                    style={isViewing ? { backgroundColor: PURPLE_BG } : undefined}
                   >
                     <span
                       className="inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-xs font-bold shrink-0"
                       style={
-                        isCurrent
+                        isViewing
                           ? { backgroundColor: "#ffffff", color: PURPLE_TEXT }
                           : { backgroundColor: "#f0eff7", color: "#4A3FB5" }
                       }
@@ -110,44 +189,30 @@ export default function DeckVersionNav({
                     <div className="flex flex-col min-w-0 flex-1">
                       <span
                         className="text-xs font-medium truncate"
-                        style={isCurrent ? { color: PURPLE_TEXT } : { color: "#2a2a33" }}
+                        style={{ color: isViewing ? PURPLE_TEXT : "#2a2a33" }}
                       >
                         {isCurrent ? "Current version" : `Version ${v.version}`}
-                        {isViewing && !isCurrent && (
-                          <span className="ml-1.5 font-semibold">· viewing</span>
-                        )}
                       </span>
                       <span className="text-[11px] text-muted truncate">
                         {v.createdAt ? formatWhen(v.createdAt) : "—"}
                       </span>
                     </div>
                     {isCurrent ? (
-                      viewingVersion === currentVersion ? (
-                        <span
-                          className="text-[11px] font-semibold shrink-0"
-                          style={{ color: PURPLE_TEXT }}
-                        >
-                          current
-                        </span>
-                      ) : (
-                        <Link
-                          href={`/viewer?id=${deckId}`}
-                          onClick={() => setOpen(false)}
-                          className="text-xs font-semibold text-brand hover:text-brand-hover shrink-0"
-                        >
-                          view
-                        </Link>
-                      )
-                    ) : (
-                      <Link
-                        href={`/viewer?id=${deckId}&v=${v.version}`}
-                        onClick={() => setOpen(false)}
-                        className="text-xs font-semibold text-brand hover:text-brand-hover shrink-0"
+                      <span
+                        className="text-[11px] font-semibold shrink-0"
+                        style={{ color: isViewing ? PURPLE_TEXT : "#9a9aa5" }}
                       >
-                        view
-                      </Link>
-                    )}
-                  </div>
+                        current
+                      </span>
+                    ) : isViewing ? (
+                      <span
+                        className="text-[11px] font-semibold shrink-0"
+                        style={{ color: PURPLE_TEXT }}
+                      >
+                        viewing
+                      </span>
+                    ) : null}
+                  </Link>
                 </li>
               );
             })}
