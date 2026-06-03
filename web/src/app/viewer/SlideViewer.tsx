@@ -329,6 +329,26 @@ export default function SlideViewer({
     }
   }
 
+  // Owner-only: set (or clear) the owner's edited text for a comment. This is
+  // what gets sent to Claude; the original author's `body` is preserved. Pass
+  // null to revert to the original. Optimistic with revert on failure.
+  async function handleEditComment(id: string, ownerEditedBody: string | null) {
+    if (!deckId) return;
+    const snapshot = comments;
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, owner_edited_body: ownerEditedBody } : c,
+      ),
+    );
+    const res = await setCommentCurationAction(deckId, id, {
+      owner_edited_body: ownerEditedBody,
+    });
+    if (!res.ok) {
+      console.error("[SlideViewer] comment edit failed:", res.error);
+      setComments(snapshot);
+    }
+  }
+
   // ---- Stub actions --------------------------------------------------
   async function handleInsertStub(
     position: number,
@@ -678,6 +698,7 @@ export default function SlideViewer({
             onAdd={handleAddComment}
             onDelete={handleDeleteComment}
             onDismiss={handleDismissComment}
+            onEdit={handleEditComment}
             onClose={() => setCommentsOpen(false)}
           />
         )}

@@ -65,6 +65,8 @@ type Props = {
   onDelete: (id: string) => Promise<void>;
   /** Owner curation: toggle whether a comment is sent to Claude. */
   onDismiss: (id: string, dismissed: boolean) => Promise<void>;
+  /** Owner curation: set (or clear, via null) the edited text sent to Claude. */
+  onEdit: (id: string, ownerEditedBody: string | null) => Promise<void>;
   onClose: () => void;
 };
 
@@ -129,10 +131,14 @@ export default function CommentsPanel({
   onAdd,
   onDelete,
   onDismiss,
+  onEdit,
   onClose,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
+  // Owner inline edit: which comment is open in the editor, and its draft text.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
 
   // Merge the comments and the (optional) flag into one list ordered by time
   // — the flag is just another timestamped event, not a pinned banner.
@@ -309,6 +315,14 @@ export default function CommentsPanel({
                   <span className="text-xs font-semibold text-foreground truncate">
                     {authorName(entry.comment.author_email)}
                   </span>
+                  {entry.comment.owner_edited_body != null && (
+                    <span
+                      title="The owner edited what's sent to Claude"
+                      className="text-[10px] text-muted shrink-0"
+                    >
+                      · edited
+                    </span>
+                  )}
                   <time
                     title={formatTime(entry.comment.created_at)}
                     className="text-xs text-muted shrink-0 ml-auto"
@@ -316,70 +330,149 @@ export default function CommentsPanel({
                     {formatRelativeTime(entry.comment.created_at)}
                   </time>
                 </div>
-                <CommentBody
-                  body={entry.comment.owner_edited_body ?? entry.comment.body}
-                  strikethrough={entry.comment.dismissed}
-                />
-                {/* Dismissed → show why + a way back. */}
-                {entry.comment.dismissed && (
-                  <p className="text-xs text-muted">
-                    Won&apos;t send to Claude ·{" "}
-                    <button
-                      type="button"
-                      onClick={() => onDismiss(entry.comment.id, false)}
-                      className="font-semibold text-foreground hover:underline"
-                    >
-                      Restore
-                    </button>
-                  </p>
-                )}
-                {canComment && entry.comment.user_id === currentUserId && (
-                  <button
-                    type="button"
-                    onClick={() => onDelete(entry.comment.id)}
-                    className="self-start text-xs text-muted hover:text-foreground transition-colors"
-                  >
-                    Delete
-                  </button>
-                )}
-                {/* Owner-only hover controls. Greyscale, overlaying the right of
-                    the comment with a left-to-right fade so the start stays
-                    readable. Hidden once dismissed (Restore lives inline). */}
-                {canCurate && !entry.comment.dismissed && (
-                  <div
-                    className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
-                    style={{
-                      background:
-                        "linear-gradient(to right, transparent, #ffffff 45%)",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onDismiss(entry.comment.id, true)}
-                      aria-label="Dismiss — won't send to Claude"
-                      title="Dismiss — won't send to Claude"
-                      className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-                      style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
-                    >
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
+                {editingId === entry.comment.id ? (
+                  // Owner inline editor — changes only what's sent to Claude.
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      rows={3}
+                      maxLength={4000}
+                      autoFocus
+                      className="rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+                    />
+                    <p className="text-[11px] text-muted leading-snug">
+                      Only changes what&apos;s sent to Claude —{" "}
+                      {authorName(entry.comment.author_email)}&apos;s comment
+                      stays as written.
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={!editDraft.trim()}
+                        onClick={async () => {
+                          const text = editDraft.trim();
+                          if (!text) return;
+                          await onEdit(entry.comment.id, text);
+                          setEditingId(null);
+                        }}
+                        className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
-                        <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
-                      </svg>
-                      <span className="text-[8px] font-semibold leading-none">
-                        Dismiss
-                      </span>
-                    </button>
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(null)}
+                        className="text-xs text-muted hover:text-foreground transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    <CommentBody
+                      body={
+                        entry.comment.owner_edited_body ?? entry.comment.body
+                      }
+                      strikethrough={entry.comment.dismissed}
+                    />
+                    {/* Dismissed → show why + a way back. */}
+                    {entry.comment.dismissed && (
+                      <p className="text-xs text-muted">
+                        Won&apos;t send to Claude ·{" "}
+                        <button
+                          type="button"
+                          onClick={() => onDismiss(entry.comment.id, false)}
+                          className="font-semibold text-foreground hover:underline"
+                        >
+                          Restore
+                        </button>
+                      </p>
+                    )}
+                    {canComment &&
+                      entry.comment.user_id === currentUserId && (
+                        <button
+                          type="button"
+                          onClick={() => onDelete(entry.comment.id)}
+                          className="self-start text-xs text-muted hover:text-foreground transition-colors"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    {/* Owner-only hover controls. Greyscale, overlaying the
+                        right of the comment with a left-to-right fade so the
+                        start stays readable. Hidden once dismissed (Restore
+                        lives inline). */}
+                    {canCurate && !entry.comment.dismissed && (
+                      <div
+                        className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+                        style={{
+                          background:
+                            "linear-gradient(to right, transparent, #ffffff 45%)",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(entry.comment.id);
+                            setEditDraft(
+                              entry.comment.owner_edited_body ??
+                                entry.comment.body,
+                            );
+                          }}
+                          aria-label="Edit what's sent to Claude"
+                          title="Edit what's sent to Claude"
+                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
+                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+                        >
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+                          </svg>
+                          <span className="text-[8px] font-semibold leading-none">
+                            Edit
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDismiss(entry.comment.id, true)}
+                          aria-label="Dismiss — won't send to Claude"
+                          title="Dismiss — won't send to Claude"
+                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
+                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+                        >
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
+                            <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+                          </svg>
+                          <span className="text-[8px] font-semibold leading-none">
+                            Dismiss
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </article>
             ),
