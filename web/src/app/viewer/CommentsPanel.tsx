@@ -264,7 +264,7 @@ export default function CommentsPanel({
                   </time>
                 </div>
                 <CommentBody body={entry.comment.body} />
-                {entry.comment.user_id === currentUserId && (
+                {canComment && entry.comment.user_id === currentUserId && (
                   <button
                     type="button"
                     onClick={() => onDelete(entry.comment.id)}

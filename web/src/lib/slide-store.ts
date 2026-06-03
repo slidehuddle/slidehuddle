@@ -607,6 +607,9 @@ export type CommentRow = {
   slide_index: number;
   body: string;
   created_at: string;
+  /** Which deck version this comment was written on. Comments are shown only
+   *  while viewing the version they belong to. */
+  version: number;
 };
 
 // Fetch every comment the signed-in user can see for a deck, ordered by
@@ -617,6 +620,7 @@ export type CommentRow = {
 export async function getCommentsForDeck(
   deckId: string,
   userId: string | null,
+  version: number,
 ): Promise<ListLoad<CommentRow>> {
   // No signed-in user / no access are legitimate empty states, not failures.
   if (!userId) return { rows: [], failed: false };
@@ -642,8 +646,11 @@ export async function getCommentsForDeck(
 
   const { data, error } = await supabase
     .from("comments")
-    .select("id, deck_id, user_id, author_email, slide_index, body, created_at")
+    .select(
+      "id, deck_id, user_id, author_email, slide_index, body, created_at, version",
+    )
     .eq("deck_id", deckId)
+    .eq("version", version)
     .order("slide_index", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) {

@@ -21,6 +21,12 @@ function joinWithAnd(items: string[]): string {
 type Props = {
   rawHtml: string;
   deckId: string | null;
+  /** The deck version currently being viewed. New comments are stamped with
+   *  it, and it's what the server filtered initialComments by. */
+  viewingVersion: number;
+  /** Read-only view (a historical version): comments/stubs/flags can be read
+   *  but not added or deleted. */
+  readOnly?: boolean;
   initialComments: CommentRow[];
   initialStubs: StubRow[];
   initialFlags: FlagRow[];
@@ -43,6 +49,8 @@ type Props = {
 export default function SlideViewer({
   rawHtml,
   deckId,
+  viewingVersion,
+  readOnly = false,
   initialComments,
   initialStubs,
   initialFlags,
@@ -220,9 +228,10 @@ export default function SlideViewer({
 
   // Permission flags.
   const isStored = !!deckId;
-  const canComment = !!(deckId && currentUserId);
-  const canInsert = !!(deckId && currentUserId);
-  const canFlag = !!(deckId && currentUserId);
+  // On a read-only (historical) view the data is shown but not mutable.
+  const canComment = !!(deckId && currentUserId) && !readOnly;
+  const canInsert = !!(deckId && currentUserId) && !readOnly;
+  const canFlag = !!(deckId && currentUserId) && !readOnly;
 
   // AI-loop actions. The feedback prompt aggregates ALL slides' comments,
   // requested stubs, and removal flags (not just the active slide). Only shown
@@ -247,6 +256,7 @@ export default function SlideViewer({
       slide_index: activeSlideIndex,
       body,
       created_at: new Date().toISOString(),
+      version: viewingVersion,
     };
     setComments((prev) => [...prev, optimistic]);
     const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
@@ -259,8 +269,11 @@ export default function SlideViewer({
         author_email: currentUserEmail,
         slide_index: activeSlideIndex,
         body,
+        version: viewingVersion,
       })
-      .select("id, deck_id, user_id, author_email, slide_index, body, created_at")
+      .select(
+        "id, deck_id, user_id, author_email, slide_index, body, created_at, version",
+      )
       .single();
     if (error) {
       console.error("[SlideViewer] comment insert failed:", error);
@@ -471,11 +484,11 @@ export default function SlideViewer({
         commentCountBySlide={commentCountBySlide}
         flaggedSlides={flaggedSlides}
         showCopyLink={isStored}
-        showInsert={isStored}
+        showInsert={isStored && !readOnly}
         canInsert={canInsert}
         loginHref={loginHref}
         onInsertStub={handleInsertStub}
-        feedbackText={feedbackText}
+        feedbackText={readOnly ? undefined : feedbackText}
       />
 
       <div className="flex-1 flex flex-row min-h-0">

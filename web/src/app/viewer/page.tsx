@@ -145,15 +145,26 @@ export default async function ViewerPage({
       }
       currentUserId = user.id;
 
-      // Comments + the "updated since you last viewed it" banner only apply to
-      // the current deck (not a historical view).
-      if (!viewingHistorical) {
-        // The prior-view timestamp and the comments are independent reads —
-        // fetch them together. (Read getDeckView BEFORE recordDeckView below so
-        // the banner still sees the pre-update timestamp.)
+      if (viewingHistorical) {
+        // A past version is read-only, but it still shows the comments that
+        // were written ON that version — their slide indices line up with that
+        // version's slides. The "updated since you last viewed" banner is
+        // current-deck only, so it's skipped here.
+        const commentsLoad = await getCommentsForDeck(
+          id,
+          user.id,
+          viewingVersion,
+        );
+        initialComments = commentsLoad.rows;
+        loadErrors.comments = commentsLoad.failed;
+      } else {
+        // Current deck. The prior-view timestamp and the current-version
+        // comments are independent reads — fetch them together. (Read
+        // getDeckView BEFORE recordDeckView below so the banner still sees the
+        // pre-update timestamp.)
         const [prior, commentsLoad] = await Promise.all([
           getDeckView(id, user.id),
-          getCommentsForDeck(id, user.id),
+          getCommentsForDeck(id, user.id, viewingVersion),
         ]);
         initialComments = commentsLoad.rows;
         loadErrors.comments = commentsLoad.failed;
@@ -194,11 +205,13 @@ export default async function ViewerPage({
     currentUserEmail = user?.email ?? null;
   }
 
-  // Viewing a past version → read-only: pass deckId=null so collaboration
-  // overlays (which track the CURRENT deck and could mis-align on an older
-  // slide set) are hidden.
-  const viewerDeckId =
-    source === "stored" && !viewingHistorical ? id ?? null : null;
+  // Stored decks always pass their real id so the comments panel can render
+  // and show this version's comments. A historical version is shown read-only
+  // (readOnly disables new comments / stubs / flags). Stubs and flags track the
+  // CURRENT deck and could mis-align on an older slide set, so they stay hidden
+  // on historical views; comments are version-scoped and line up correctly.
+  const viewerDeckId = source === "stored" ? id ?? null : null;
+  const readOnly = viewingHistorical;
   const viewerStubs = viewingHistorical ? [] : initialStubs;
   const viewerFlags = viewingHistorical ? [] : initialFlags;
 
@@ -244,6 +257,8 @@ export default async function ViewerPage({
       <SlideViewer
         rawHtml={html}
         deckId={viewerDeckId}
+        viewingVersion={viewingVersion}
+        readOnly={readOnly}
         initialComments={initialComments}
         initialStubs={viewerStubs}
         initialFlags={viewerFlags}
