@@ -42,16 +42,6 @@ function thumbWidth(deck: ParsedDeck): number {
   return Math.round(Math.min(168, Math.max(64, THUMB_H * ar)));
 }
 
-// Directions the little sparks fly when a comment count bumps up.
-const SPARKS = [
-  { x: "-11px", y: "-9px" },
-  { x: "11px", y: "-9px" },
-  { x: "-13px", y: "1px" },
-  { x: "13px", y: "1px" },
-  { x: "-6px", y: "11px" },
-  { x: "6px", y: "11px" },
-];
-
 function SlideThumb({
   deck,
   slideIndex,
@@ -122,37 +112,17 @@ function SlideThumb({
             the scroller carries extra top/right padding to give this room.
             The white ring lifts it off the slide it overlaps. */}
         {commentCount > 0 && (
-          <span className="absolute top-0 right-0 translate-x-1/3 -translate-y-1/3">
-            {/* spark burst — only present briefly when the count just rose */}
-            {sparking && (
-              <span
-                key={sparkKey}
-                aria-hidden="true"
-                className="pointer-events-none absolute left-1/2 top-1/2"
-              >
-                {SPARKS.map((s, i) => (
-                  <span
-                    key={i}
-                    className="comment-spark absolute h-1 w-1 rounded-full"
-                    style={
-                      {
-                        backgroundColor: i % 2 ? "#0F6E56" : "#F2B705",
-                        "--sx": s.x,
-                        "--sy": s.y,
-                      } as React.CSSProperties
-                    }
-                  />
-                ))}
-              </span>
-            )}
-            <span
-              key={`badge-${sparkKey}`}
-              aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
-              className={`inline-flex items-center justify-center rounded-full min-w-[16px] h-4 px-1 text-[10px] font-bold leading-none ring-2 ring-white ${sparking ? "comment-badge-pop" : ""}`}
-              style={{ backgroundColor: "#0F6E56", color: "#ffffff" }}
-            >
-              {commentCount}
-            </span>
+          // A bumping key replays the CSS "pop" each time the count rises (a
+          // teammate's comment arriving live). If the animation doesn't run for
+          // any reason, the badge simply sits in place — it can never linger or
+          // obstruct the number.
+          <span
+            key={`badge-${sparkKey}`}
+            aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
+            className={`absolute top-0 right-0 translate-x-1/3 -translate-y-1/3 inline-flex items-center justify-center rounded-full min-w-[16px] h-4 px-1 text-[10px] font-bold leading-none ring-2 ring-white ${sparking ? "animate-[commentBadgePop_500ms_ease-out] motion-reduce:animate-none" : ""}`}
+            style={{ backgroundColor: "#0F6E56", color: "#ffffff" }}
+          >
+            {commentCount}
           </span>
         )}
 
