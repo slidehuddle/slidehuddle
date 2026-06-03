@@ -169,6 +169,68 @@ export default function SlideViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [displayItems.length]);
 
+  // Live sync: subscribe to this deck's comment changes so a teammate's
+  // add / edit / dismiss shows up without a refresh. Current deck only
+  // (historical versions are immutable). Realtime respects RLS via the user's
+  // session, and inserts are filtered to the version being viewed. All visible
+  // counts derive from `comments`, so they update automatically.
+  useEffect(() => {
+    if (!deckId || readOnly) return;
+    let cancelled = false;
+    let cleanup = () => {};
+    (async () => {
+      const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+      const supabase = getSupabaseBrowser();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (cancelled) return;
+      // Ensure Realtime authorizes with the user's token so RLS applies.
+      if (session) supabase.realtime.setAuth(session.access_token);
+      const filter = `deck_id=eq.${deckId}`;
+      const channel = supabase
+        .channel(`deck-comments-${deckId}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "comments", filter },
+          (payload) => {
+            const row = payload.new as CommentRow;
+            if (row.version !== viewingVersion) return;
+            setComments((prev) =>
+              prev.some((c) => c.id === row.id) ? prev : [...prev, row],
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "comments", filter },
+          (payload) => {
+            const row = payload.new as CommentRow;
+            setComments((prev) =>
+              prev.map((c) => (c.id === row.id ? { ...c, ...row } : c)),
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "comments", filter },
+          (payload) => {
+            const oldRow = payload.old as { id?: string };
+            if (!oldRow?.id) return;
+            setComments((prev) => prev.filter((c) => c.id !== oldRow.id));
+          },
+        )
+        .subscribe();
+      cleanup = () => {
+        supabase.removeChannel(channel);
+      };
+    })();
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, [deckId, readOnly, viewingVersion]);
+
   // Scale-to-fit: contain the deck's natural aspect ratio within the stage.
   const stageRef = useRef<HTMLDivElement>(null);
   const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
@@ -314,9 +376,15 @@ export default function SlideViewer({
       setComments((prev) => prev.filter((c) => c.id !== optimisticId));
       return;
     }
-    setComments((prev) =>
-      prev.map((c) => (c.id === optimisticId ? (data as CommentRow) : c)),
-    );
+    // Swap the optimistic row for the saved one. Dedupe in case the Realtime
+    // INSERT for this same row already arrived (own change echoes back).
+    setComments((prev) => {
+      const real = data as CommentRow;
+      const withoutTemp = prev.filter((c) => c.id !== optimisticId);
+      return withoutTemp.some((c) => c.id === real.id)
+        ? withoutTemp
+        : [...withoutTemp, real];
+    });
   }
 
   async function handleDeleteComment(id: string) {

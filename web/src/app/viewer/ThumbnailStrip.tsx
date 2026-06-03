@@ -42,6 +42,16 @@ function thumbWidth(deck: ParsedDeck): number {
   return Math.round(Math.min(168, Math.max(64, THUMB_H * ar)));
 }
 
+// Directions the little sparks fly when a comment count bumps up.
+const SPARKS = [
+  { x: "-11px", y: "-9px" },
+  { x: "11px", y: "-9px" },
+  { x: "-13px", y: "1px" },
+  { x: "13px", y: "1px" },
+  { x: "-6px", y: "11px" },
+  { x: "6px", y: "11px" },
+];
+
 function SlideThumb({
   deck,
   slideIndex,
@@ -49,6 +59,7 @@ function SlideThumb({
   active,
   flagged,
   commentCount,
+  sparkKey,
   onClick,
 }: {
   deck: ParsedDeck;
@@ -57,10 +68,15 @@ function SlideThumb({
   active: boolean;
   flagged: boolean;
   commentCount: number;
+  /** Bumps each time this slide's comment count rises; drives the spark/pop.
+   *  0 = never sparked (e.g. initial load). */
+  sparkKey: number;
   onClick: () => void;
 }) {
   const w = thumbWidth(deck);
   const scale = w / deck.slideWidth;
+  const sparking = sparkKey > 0;
+
   return (
     <div className="flex flex-col items-center gap-1 shrink-0">
       {/* Relative wrapper sized to the thumbnail so the corner badges sit on
@@ -106,12 +122,37 @@ function SlideThumb({
             the scroller carries extra top/right padding to give this room.
             The white ring lifts it off the slide it overlaps. */}
         {commentCount > 0 && (
-          <span
-            aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
-            className="absolute top-0 right-0 translate-x-1/3 -translate-y-1/3 inline-flex items-center justify-center rounded-full min-w-[16px] h-4 px-1 text-[10px] font-bold leading-none ring-2 ring-white"
-            style={{ backgroundColor: "#0F6E56", color: "#ffffff" }}
-          >
-            {commentCount}
+          <span className="absolute top-0 right-0 translate-x-1/3 -translate-y-1/3">
+            {/* spark burst — only present briefly when the count just rose */}
+            {sparking && (
+              <span
+                key={sparkKey}
+                aria-hidden="true"
+                className="pointer-events-none absolute left-1/2 top-1/2"
+              >
+                {SPARKS.map((s, i) => (
+                  <span
+                    key={i}
+                    className="comment-spark absolute h-1 w-1 rounded-full"
+                    style={
+                      {
+                        backgroundColor: i % 2 ? "#0F6E56" : "#F2B705",
+                        "--sx": s.x,
+                        "--sy": s.y,
+                      } as React.CSSProperties
+                    }
+                  />
+                ))}
+              </span>
+            )}
+            <span
+              key={`badge-${sparkKey}`}
+              aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
+              className={`inline-flex items-center justify-center rounded-full min-w-[16px] h-4 px-1 text-[10px] font-bold leading-none ring-2 ring-white ${sparking ? "comment-badge-pop" : ""}`}
+              style={{ backgroundColor: "#0F6E56", color: "#ffffff" }}
+            >
+              {commentCount}
+            </span>
           </span>
         )}
 
@@ -295,6 +336,31 @@ export default function ThumbnailStrip({
 }: Props) {
   const [openGap, setOpenGap] = useState<number | null>(null);
 
+  // Spark a slide's count badge when its comment count rises (e.g. a teammate's
+  // comment arrives live). Detected here — a component that stays mounted across
+  // comment-state changes — so a per-thumbnail ref can't get reset. Baseline is
+  // recorded on first run so existing comments don't spark on load.
+  const prevCounts = useRef<Map<number, number> | null>(null);
+  const [sparkKeys, setSparkKeys] = useState<Record<number, number>>({});
+  useEffect(() => {
+    if (prevCounts.current === null) {
+      prevCounts.current = new Map(commentCountBySlide);
+      return;
+    }
+    const risen: number[] = [];
+    commentCountBySlide.forEach((count, slideIndex) => {
+      if (count > (prevCounts.current!.get(slideIndex) ?? 0)) risen.push(slideIndex);
+    });
+    prevCounts.current = new Map(commentCountBySlide);
+    if (risen.length > 0) {
+      setSparkKeys((prev) => {
+        const next = { ...prev };
+        for (const s of risen) next[s] = (next[s] ?? 0) + 1;
+        return next;
+      });
+    }
+  }, [commentCountBySlide]);
+
   // --- Custom scroll-position indicator for the thumbnail row -----------
   // The native scrollbar is hidden, so this slim grey track shows where you
   // are when the slides overflow. `widthPct` is how much of the row is
@@ -438,6 +504,7 @@ export default function ThumbnailStrip({
                   active={i === activeIndex}
                   flagged={flaggedSlides.has(item.slideIndex)}
                   commentCount={commentCountBySlide.get(item.slideIndex) ?? 0}
+                  sparkKey={sparkKeys[item.slideIndex] ?? 0}
                   onClick={() => onSelect(i)}
                 />
               ) : (

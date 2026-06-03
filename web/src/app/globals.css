@@ -58,3 +58,44 @@ body {
     animation: none !important;
   }
 }
+
+/* Live comment arrival: the thumbnail count badge "pops" and throws a few
+   sparks outward. Triggered only when the count actually increases (e.g. a
+   teammate's comment arrives over Realtime), not on first load. */
+@keyframes commentBadgePop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.4);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes commentSpark {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--sx, 0px), var(--sy, 0px)) scale(0.3);
+  }
+}
+
+.comment-badge-pop {
+  animation: commentBadgePop 500ms ease-out;
+}
+
+.comment-spark {
+  animation: commentSpark 600ms ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comment-badge-pop,
+  .comment-spark {
+    animation: none !important;
+  }
+}
