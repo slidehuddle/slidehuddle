@@ -639,6 +639,7 @@ export default function SlideViewer({
             flag={activeFlag}
             comments={visibleComments}
             canComment={canComment}
+            readOnly={readOnly}
             currentUserId={currentUserId}
             loginHref={loginHref}
             onAdd={handleAddComment}

@@ -48,6 +48,9 @@ type Props = {
   flag: FlagRow | null;
   comments: CommentRow[];
   canComment: boolean;
+  /** Viewing a past version: comments are visible but can't be added. Drives a
+   *  "read-only" footer instead of the "sign in to comment" prompt. */
+  readOnly?: boolean;
   currentUserId: string | null;
   loginHref: string;
   onAdd: (body: string) => Promise<void>;
@@ -89,6 +92,7 @@ export default function CommentsPanel({
   flag,
   comments,
   canComment,
+  readOnly = false,
   currentUserId,
   loginHref,
   onAdd,
@@ -316,6 +320,12 @@ export default function CommentsPanel({
               {posting ? "Posting…" : "Send"}
             </button>
           </form>
+        ) : readOnly ? (
+          <div className="border-t border-border p-3">
+            <p className="text-sm text-muted">
+              Comments are read-only on past versions.
+            </p>
+          </div>
         ) : (
           <div className="border-t border-border p-3 flex flex-col gap-2">
             <p className="text-sm text-muted">Sign in to comment.</p>
