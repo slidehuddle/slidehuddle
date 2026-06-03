@@ -189,7 +189,7 @@ export default function SlideViewer({
       if (session) supabase.realtime.setAuth(session.access_token);
       const filter = `deck_id=eq.${deckId}`;
       const channel = supabase
-        .channel(`deck-comments-${deckId}`)
+        .channel(`deck-${deckId}`)
         .on(
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "comments", filter },
@@ -218,6 +218,72 @@ export default function SlideViewer({
             const oldRow = payload.old as { id?: string };
             if (!oldRow?.id) return;
             setComments((prev) => prev.filter((c) => c.id !== oldRow.id));
+          },
+        )
+        // --- requested (stub) slides --- (not version-scoped)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "slide_stubs", filter },
+          (payload) => {
+            const row = payload.new as StubRow;
+            // The author's email isn't a column on this row; a live-arrived
+            // stub shows as "a teammate" until reload.
+            setStubs((prev) =>
+              prev.some((s) => s.id === row.id)
+                ? prev
+                : [...prev, { ...row, requested_by_email: null }],
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "slide_stubs", filter },
+          (payload) => {
+            const row = payload.new as StubRow;
+            setStubs((prev) =>
+              prev.map((s) => (s.id === row.id ? { ...s, ...row } : s)),
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "slide_stubs", filter },
+          (payload) => {
+            const oldRow = payload.old as { id?: string };
+            if (!oldRow?.id) return;
+            setStubs((prev) => prev.filter((s) => s.id !== oldRow.id));
+          },
+        )
+        // --- removal flags ---
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "slide_flags", filter },
+          (payload) => {
+            const row = payload.new as FlagRow;
+            setFlags((prev) =>
+              prev.some((f) => f.id === row.id)
+                ? prev
+                : [...prev, { ...row, flagged_by_email: null }],
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "slide_flags", filter },
+          (payload) => {
+            const row = payload.new as FlagRow;
+            setFlags((prev) =>
+              prev.map((f) => (f.id === row.id ? { ...f, ...row } : f)),
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "slide_flags", filter },
+          (payload) => {
+            const oldRow = payload.old as { id?: string };
+            if (!oldRow?.id) return;
+            setFlags((prev) => prev.filter((f) => f.id !== oldRow.id));
           },
         )
         .subscribe();
