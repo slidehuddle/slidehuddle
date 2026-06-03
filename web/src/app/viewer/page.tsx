@@ -255,6 +255,11 @@ export default async function ViewerPage({
       )}
       {bannerDetail && <UpdatedBanner detail={bannerDetail} />}
       <SlideViewer
+        // Remount on version switch so comments/stubs/flags re-seed from the
+        // server's per-version data. Without this, soft-navigating between
+        // versions reuses the component and keeps the previous version's
+        // collaboration state (e.g. v1 comments lingering on v2).
+        key={`${id ?? "none"}:v${viewingVersion}`}
         rawHtml={html}
         deckId={viewerDeckId}
         viewingVersion={viewingVersion}
