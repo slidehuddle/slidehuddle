@@ -153,35 +153,56 @@ function StubDeleteMenu({
   );
 }
 
+// Compose the stub's request fields into the readable description that seeds
+// the owner editor / is sent to Claude when unedited.
+function composeStubText(stub: StubRow): string {
+  return [
+    stub.title && `Title: ${stub.title}`,
+    stub.subtitle && `Subtitle: ${stub.subtitle}`,
+    stub.body && `Should cover: ${stub.body}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export default function StubSlideView({
   stub,
   currentUserId,
   isOwner,
+  canCurate = false,
   onDelete,
+  onDismiss,
+  onEdit,
 }: {
   stub: StubRow;
   currentUserId: string | null;
   isOwner: boolean;
+  /** Deck owner on the current deck: reveals Dismiss/Edit curation controls. */
+  canCurate?: boolean;
   onDelete: (stubId: string) => Promise<void>;
+  onDismiss?: (stubId: string, dismissed: boolean) => Promise<void>;
+  onEdit?: (stubId: string, ownerEditedBody: string | null) => Promise<void>;
 }) {
   // Only the person who requested the stub or the deck owner may delete it.
   const canDelete =
     isOwner || (!!currentUserId && stub.requested_by === currentUserId);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const editBtnRef = useRef<HTMLButtonElement>(null);
+  const edited = stub.owner_edited_body != null;
 
   // Fills the card it's placed in — the parent sizes that card to match the
   // imported slides (and resizes it when the comments panel opens), so a
   // requested slide reads at the same size, position and aspect ratio.
   return (
     <div
-      className="w-full h-full bg-white rounded-xl flex items-start overflow-hidden"
+      className={`group relative w-full h-full bg-white rounded-xl flex items-start overflow-hidden transition-opacity ${stub.dismissed ? "opacity-60" : ""}`}
       style={{ border: "2px dashed #c9c6e6" }}
     >
       {/* Content is TOP-anchored (not centred) so the "Requested by" pill sits
           at the same height on every requested slide regardless of how much
-          follows it; whatever the user adds flows beneath. The pt is a % of
-          card width — which tracks card height too since the aspect ratio is
-          fixed — so the anchor stays proportional as the card resizes. Uses
-          most of the card width and scrolls if a long request overflows. */}
+          follows it; whatever the user adds flows beneath. */}
       <div className="w-full max-h-full overflow-auto px-[6%] pt-[8%] pb-8">
         <div className="flex flex-col gap-5 w-full max-w-[920px]">
           <div className="flex items-center gap-1.5 self-start">
@@ -205,37 +226,180 @@ export default function StubSlideView({
               </svg>
               Requested by {displayName(stub.requested_by_email)}
             </span>
+            {edited && (
+              <span className="text-[11px] text-muted">· edited</span>
+            )}
             {canDelete && (
               <StubDeleteMenu onDelete={() => onDelete(stub.id)} />
             )}
           </div>
 
-          <div className="flex flex-col gap-1">
-            <FieldLabel>Title</FieldLabel>
-            <span className="text-[22px] font-medium text-foreground leading-snug">
-              {stub.title || "Untitled slide"}
-            </span>
-          </div>
-
-          {stub.subtitle && (
-            <div className="flex flex-col gap-1">
-              <FieldLabel>Subtitle</FieldLabel>
-              <span className="text-[16px] text-muted leading-snug">
-                {stub.subtitle}
-              </span>
-            </div>
+          {stub.dismissed && (
+            <p className="text-xs text-muted self-start">
+              Won&apos;t send to Claude ·{" "}
+              <button
+                type="button"
+                onClick={() => onDismiss?.(stub.id, false)}
+                className="font-semibold text-foreground hover:underline"
+              >
+                Restore
+              </button>
+            </p>
           )}
 
-          {stub.body && (
+          {edited ? (
+            // Owner replaced the request with their own description; show that
+            // (it's what Claude receives). The original fields stay in the DB.
             <div className="flex flex-col gap-1.5">
-              <FieldLabel>What should this slide cover</FieldLabel>
-              <p className="w-full text-[14px] text-foreground leading-relaxed rounded-lg bg-black/[0.04] px-4 py-3.5 whitespace-pre-wrap">
-                {stub.body}
+              <FieldLabel>Sent to Claude</FieldLabel>
+              <p
+                className={`w-full text-[14px] leading-relaxed rounded-lg bg-black/[0.04] px-4 py-3.5 whitespace-pre-wrap ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
+              >
+                {stub.owner_edited_body}
               </p>
             </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1">
+                <FieldLabel>Title</FieldLabel>
+                <span
+                  className={`text-[22px] font-medium leading-snug ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
+                >
+                  {stub.title || "Untitled slide"}
+                </span>
+              </div>
+
+              {stub.subtitle && (
+                <div className="flex flex-col gap-1">
+                  <FieldLabel>Subtitle</FieldLabel>
+                  <span className="text-[16px] text-muted leading-snug">
+                    {stub.subtitle}
+                  </span>
+                </div>
+              )}
+
+              {stub.body && (
+                <div className="flex flex-col gap-1.5">
+                  <FieldLabel>What should this slide cover</FieldLabel>
+                  <p
+                    className={`w-full text-[14px] leading-relaxed rounded-lg bg-black/[0.04] px-4 py-3.5 whitespace-pre-wrap ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
+                  >
+                    {stub.body}
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
+
+      {/* Owner-only hover curation controls — top-right of the card. The card's
+          content is left-anchored, so these don't overlap it. */}
+      {canCurate && !stub.dismissed && (
+        <div className="pointer-events-none absolute top-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <button
+            ref={editBtnRef}
+            type="button"
+            onClick={() => {
+              setDraft(stub.owner_edited_body ?? composeStubText(stub));
+              setEditing(true);
+            }}
+            aria-label="Edit what's sent to Claude"
+            title="Edit what's sent to Claude"
+            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
+            style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+            </svg>
+            <span className="text-[8px] font-semibold leading-none">Edit</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onDismiss?.(stub.id, true)}
+            aria-label="Dismiss — won't send to Claude"
+            title="Dismiss — won't send to Claude"
+            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
+            style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
+              <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+            </svg>
+            <span className="text-[8px] font-semibold leading-none">
+              Dismiss
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Edit popup — rendered in a portal so it floats above the slide stage. */}
+      <PortalPopover
+        anchorRef={editBtnRef}
+        open={editing}
+        onClose={() => setEditing(false)}
+        width={320}
+        placement="bottom-center"
+      >
+        <div className="rounded-xl border border-border bg-white shadow-[0_12px_40px_rgba(0,0,0,0.15)] p-3 flex flex-col gap-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={5}
+            maxLength={4000}
+            autoFocus
+            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+          />
+          <p className="text-[11px] text-muted leading-snug">
+            Only changes what&apos;s sent to Claude —{" "}
+            {displayName(stub.requested_by_email)}&apos;s request stays as
+            written.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={!draft.trim()}
+              onClick={async () => {
+                const text = draft.trim();
+                if (!text) return;
+                await onEdit?.(stub.id, text);
+                setEditing(false);
+              }}
+              className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="text-xs text-muted hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </PortalPopover>
     </div>
   );
 }

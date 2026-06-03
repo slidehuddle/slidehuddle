@@ -723,6 +723,116 @@ export async function setCommentCuration(
   return { ok: true };
 }
 
+// Owner-only curation of a requested (stub) slide: dismiss and/or set the
+// owner's edited description. Deck-owner only (note: unlike deleteStub, the
+// requester cannot curate — curation shapes the owner's outgoing prompt).
+export async function setStubCuration(
+  deckId: string,
+  stubId: string,
+  userId: string,
+  patch: { dismissed?: boolean; owner_edited_body?: string | null },
+): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: stub, error: readErr } = await supabase
+    .from("slide_stubs")
+    .select("id, deck_id")
+    .eq("id", stubId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] stub read failed:", readErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!stub || stub.deck_id !== deckId) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const { data: deck, error: deckErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (deckErr) {
+    console.error("[slide-store] deck read failed:", deckErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!deck || deck.user_id !== userId) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  const update: { dismissed?: boolean; owner_edited_body?: string | null } = {};
+  if (typeof patch.dismissed === "boolean") update.dismissed = patch.dismissed;
+  if ("owner_edited_body" in patch) {
+    update.owner_edited_body = patch.owner_edited_body;
+  }
+  if (Object.keys(update).length === 0) return { ok: true };
+
+  const { error: updErr } = await supabase
+    .from("slide_stubs")
+    .update(update)
+    .eq("id", stubId);
+  if (updErr) {
+    console.error("[slide-store] stub curation update failed:", updErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
+}
+
+// Owner-only curation of a removal flag: dismiss and/or set the owner's edited
+// reason. Deck-owner only; the original flagger's `reason` is never touched.
+export async function setFlagCuration(
+  deckId: string,
+  flagId: string,
+  userId: string,
+  patch: { dismissed?: boolean; owner_edited_reason?: string | null },
+): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: flag, error: readErr } = await supabase
+    .from("slide_flags")
+    .select("id, deck_id")
+    .eq("id", flagId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] flag read failed:", readErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!flag || flag.deck_id !== deckId) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const { data: deck, error: deckErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (deckErr) {
+    console.error("[slide-store] deck read failed:", deckErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!deck || deck.user_id !== userId) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  const update: { dismissed?: boolean; owner_edited_reason?: string | null } =
+    {};
+  if (typeof patch.dismissed === "boolean") update.dismissed = patch.dismissed;
+  if ("owner_edited_reason" in patch) {
+    update.owner_edited_reason = patch.owner_edited_reason;
+  }
+  if (Object.keys(update).length === 0) return { ok: true };
+
+  const { error: updErr } = await supabase
+    .from("slide_flags")
+    .update(update)
+    .eq("id", flagId);
+  if (updErr) {
+    console.error("[slide-store] flag curation update failed:", updErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
+}
+
 type DbError = {
   code?: string;
   message?: string;
@@ -801,6 +911,11 @@ export type StubRow = {
   requested_by: string | null;
   requested_by_email: string | null;
   created_at: string;
+  /** Owner curation: excluded from the Claude prompt (still shown). */
+  dismissed: boolean;
+  /** Owner curation: owner's edited description sent to Claude (overrides the
+   *  composed title/subtitle/body line). null = unedited. */
+  owner_edited_body: string | null;
 };
 
 export async function getStubsForDeck(
@@ -809,7 +924,9 @@ export async function getStubsForDeck(
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("slide_stubs")
-    .select("id, deck_id, position, title, subtitle, body, requested_by, created_at")
+    .select(
+      "id, deck_id, position, title, subtitle, body, requested_by, created_at, dismissed, owner_edited_body",
+    )
     .eq("deck_id", deckId)
     .order("position", { ascending: true })
     .order("created_at", { ascending: true });
@@ -903,6 +1020,11 @@ export type FlagRow = {
   flagged_by: string | null;
   flagged_by_email: string | null;
   created_at: string;
+  /** Owner curation: excluded from the Claude prompt (still shown). */
+  dismissed: boolean;
+  /** Owner curation: owner's edited removal reason sent to Claude. null =
+   *  unedited (the original flagger's reason stays in `reason`). */
+  owner_edited_reason: string | null;
 };
 
 export async function getFlagsForDeck(
@@ -911,7 +1033,9 @@ export async function getFlagsForDeck(
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("slide_flags")
-    .select("id, deck_id, slide_index, reason, flagged_by, created_at")
+    .select(
+      "id, deck_id, slide_index, reason, flagged_by, created_at, dismissed, owner_edited_reason",
+    )
     .eq("deck_id", deckId)
     .order("created_at", { ascending: true });
   if (error) {

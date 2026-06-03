@@ -13,7 +13,11 @@ import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 export type FeedbackInputs = {
   comments: Pick<CommentRow, "slide_index" | "body">[];
   flags: Pick<FlagRow, "slide_index" | "reason">[];
-  stubs: Pick<StubRow, "position" | "title" | "subtitle" | "body">[];
+  stubs: (Pick<StubRow, "position" | "title" | "subtitle" | "body"> & {
+    /** Owner's edited description; when set, used verbatim instead of the
+     *  composed title/subtitle/body line. */
+    owner_edited_body?: string | null;
+  })[];
 };
 
 const HEADER = "Please revise this deck based on the team's feedback:";
@@ -46,14 +50,23 @@ export function buildFeedbackPrompt(input: FeedbackInputs): string | null {
   }
 
   for (const s of input.stubs) {
-    const parts: string[] = [];
-    const title = (s.title ?? "").trim();
-    const subtitle = (s.subtitle ?? "").trim();
-    const body = (s.body ?? "").trim();
-    if (title) parts.push(`Title: ${title}`);
-    if (subtitle) parts.push(`Subtitle: ${subtitle}`);
-    if (body) parts.push(`Should cover: ${body}`);
-    if (parts.length === 0) continue;
+    // The owner's edited description, when present, replaces the composed
+    // title/subtitle/body line verbatim.
+    const edited = (s.owner_edited_body ?? "").trim();
+    let description: string;
+    if (edited) {
+      description = edited;
+    } else {
+      const parts: string[] = [];
+      const title = (s.title ?? "").trim();
+      const subtitle = (s.subtitle ?? "").trim();
+      const body = (s.body ?? "").trim();
+      if (title) parts.push(`Title: ${title}`);
+      if (subtitle) parts.push(`Subtitle: ${subtitle}`);
+      if (body) parts.push(`Should cover: ${body}`);
+      if (parts.length === 0) continue;
+      description = parts.join(", ");
+    }
     // position = number of real slides before the stub. 0 → before slide 1.
     const where =
       s.position <= 0 ? "before slide 1" : `after slide ${s.position}`;
@@ -62,7 +75,7 @@ export function buildFeedbackPrompt(input: FeedbackInputs): string | null {
       // has sort index N-1, so use position - 0.5.
       sort: s.position - 0.5,
       sub: 2,
-      text: `- New slide requested ${where}: ${parts.join(", ")}`,
+      text: `- New slide requested ${where}: ${description}`,
     });
   }
 

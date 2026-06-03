@@ -8,7 +8,12 @@ import SlideFlagControl from "./SlideFlagControl";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt } from "./feedback-prompt";
-import { deleteStubAction, setCommentCurationAction } from "./actions";
+import {
+  deleteStubAction,
+  setCommentCurationAction,
+  setStubCurationAction,
+  setFlagCurationAction,
+} from "./actions";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
 // "a, b, and c" — for the load-error banner's list of failed datasets.
@@ -251,8 +256,21 @@ export default function SlideViewer({
                 slide_index: c.slide_index,
                 body: c.owner_edited_body ?? c.body,
               })),
-            flags,
-            stubs,
+            flags: flags
+              .filter((f) => !f.dismissed)
+              .map((f) => ({
+                slide_index: f.slide_index,
+                reason: f.owner_edited_reason ?? f.reason,
+              })),
+            stubs: stubs
+              .filter((s) => !s.dismissed)
+              .map((s) => ({
+                position: s.position,
+                title: s.title,
+                subtitle: s.subtitle,
+                body: s.body,
+                owner_edited_body: s.owner_edited_body,
+              })),
           })
         : undefined,
     [isStored, comments, flags, stubs],
@@ -367,7 +385,9 @@ export default function SlideViewer({
         body: fields.body || null,
         requested_by: currentUserId,
       })
-      .select("id, deck_id, position, title, subtitle, body, requested_by, created_at")
+      .select(
+        "id, deck_id, position, title, subtitle, body, requested_by, created_at, dismissed, owner_edited_body",
+      )
       .single();
     if (error) {
       console.error("[SlideViewer] stub insert failed:", error);
@@ -397,6 +417,38 @@ export default function SlideViewer({
     }
   }
 
+  // Owner-only: dismiss/restore a requested slide (exclude from Claude).
+  async function handleDismissStub(stubId: string, dismissed: boolean) {
+    if (!deckId) return;
+    const snapshot = stubs;
+    setStubs((prev) =>
+      prev.map((s) => (s.id === stubId ? { ...s, dismissed } : s)),
+    );
+    const res = await setStubCurationAction(deckId, stubId, { dismissed });
+    if (!res.ok) {
+      console.error("[SlideViewer] stub dismiss failed:", res.error);
+      setStubs(snapshot);
+    }
+  }
+
+  // Owner-only: set/clear the owner's edited description for a requested slide.
+  async function handleEditStub(stubId: string, ownerEditedBody: string | null) {
+    if (!deckId) return;
+    const snapshot = stubs;
+    setStubs((prev) =>
+      prev.map((s) =>
+        s.id === stubId ? { ...s, owner_edited_body: ownerEditedBody } : s,
+      ),
+    );
+    const res = await setStubCurationAction(deckId, stubId, {
+      owner_edited_body: ownerEditedBody,
+    });
+    if (!res.ok) {
+      console.error("[SlideViewer] stub edit failed:", res.error);
+      setStubs(snapshot);
+    }
+  }
+
   // ---- Flag actions --------------------------------------------------
   async function handleFlag(reason: string) {
     if (!deckId || !currentUserId || activeSlideIndex === null) return;
@@ -410,7 +462,9 @@ export default function SlideViewer({
         reason: reason || null,
         flagged_by: currentUserId,
       })
-      .select("id, deck_id, slide_index, reason, flagged_by, created_at")
+      .select(
+        "id, deck_id, slide_index, reason, flagged_by, created_at, dismissed, owner_edited_reason",
+      )
       .single();
     if (error) {
       console.error("[SlideViewer] flag insert failed:", error);
@@ -434,6 +488,41 @@ export default function SlideViewer({
       .eq("id", flagId);
     if (error) {
       console.error("[SlideViewer] unflag failed:", error);
+      setFlags(snapshot);
+    }
+  }
+
+  // Owner-only: dismiss/restore a removal flag (exclude from Claude).
+  async function handleDismissFlag(flagId: string, dismissed: boolean) {
+    if (!deckId) return;
+    const snapshot = flags;
+    setFlags((prev) =>
+      prev.map((f) => (f.id === flagId ? { ...f, dismissed } : f)),
+    );
+    const res = await setFlagCurationAction(deckId, flagId, { dismissed });
+    if (!res.ok) {
+      console.error("[SlideViewer] flag dismiss failed:", res.error);
+      setFlags(snapshot);
+    }
+  }
+
+  // Owner-only: set/clear the owner's edited removal reason for a flag.
+  async function handleEditFlag(
+    flagId: string,
+    ownerEditedReason: string | null,
+  ) {
+    if (!deckId) return;
+    const snapshot = flags;
+    setFlags((prev) =>
+      prev.map((f) =>
+        f.id === flagId ? { ...f, owner_edited_reason: ownerEditedReason } : f,
+      ),
+    );
+    const res = await setFlagCurationAction(deckId, flagId, {
+      owner_edited_reason: ownerEditedReason,
+    });
+    if (!res.ok) {
+      console.error("[SlideViewer] flag edit failed:", res.error);
       setFlags(snapshot);
     }
   }
@@ -563,7 +652,10 @@ export default function SlideViewer({
                 stub={activeStub}
                 currentUserId={currentUserId}
                 isOwner={isOwner}
+                canCurate={canCurate}
                 onDelete={handleDeleteStub}
+                onDismiss={handleDismissStub}
+                onEdit={handleEditStub}
               />
             </div>
           ) : (
@@ -699,6 +791,8 @@ export default function SlideViewer({
             onDelete={handleDeleteComment}
             onDismiss={handleDismissComment}
             onEdit={handleEditComment}
+            onFlagDismiss={handleDismissFlag}
+            onFlagEdit={handleEditFlag}
             onClose={() => setCommentsOpen(false)}
           />
         )}
