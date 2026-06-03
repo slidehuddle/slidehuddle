@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { copyText } from "./copy-text";
 
-// AMBER (#854F0B) marks AI-loop actions. "Copy feedback for Claude" gathers
-// the team's comments / requested slides / removal flags into a structured
-// prompt and copies it, ready to paste into Claude.
-const AMBER = "#854F0B";
-const AMBER_HOVER = "#6B3F09";
+// "Copy feedback for Claude" gathers the team's comments / requested slides /
+// removal flags into a structured prompt and copies it, ready to paste into
+// Claude. Styled as a brand-purple OUTLINE button (white fill), with a light
+// purple tint on hover.
+const PURPLE = "#4A3FB5";
+const PURPLE_TINT = "#EEEDFE";
 
 type Props = {
   /** Prebuilt prompt text, or null when there's no feedback to copy. */
@@ -56,20 +57,20 @@ export default function FeedbackButton({ feedbackText }: Props) {
     );
   }
 
-  // Feedback exists → amber AI-loop action with a white count badge.
+  // Feedback exists → brand-purple OUTLINE action with a purple count badge.
   return (
     <button
       type="button"
       onClick={handleCopy}
       aria-live="polite"
       title="Copy the team's feedback as a prompt for Claude"
-      className="grid place-items-center rounded-lg text-white text-sm font-semibold px-3.5 py-2 transition-colors"
-      style={{ backgroundColor: AMBER }}
+      className="grid place-items-center rounded-lg border text-sm font-semibold px-3.5 py-2 transition-colors"
+      style={{ backgroundColor: "#ffffff", borderColor: PURPLE, color: PURPLE }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.backgroundColor = AMBER_HOVER;
+        e.currentTarget.style.backgroundColor = PURPLE_TINT;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = AMBER;
+        e.currentTarget.style.backgroundColor = "#ffffff";
       }}
     >
       {/* Both labels share one grid cell, so the button keeps the (wider)
@@ -84,8 +85,8 @@ export default function FeedbackButton({ feedbackText }: Props) {
         Copy feedback for Claude
         <span
           aria-label={`${count} feedback ${count === 1 ? "item" : "items"}`}
-          className="inline-flex items-center justify-center rounded-full bg-white text-xs font-bold leading-none min-w-5 h-5 px-1.5"
-          style={{ color: AMBER }}
+          className="inline-flex items-center justify-center rounded-full text-xs font-bold leading-none min-w-5 h-5 px-1.5 text-white"
+          style={{ backgroundColor: PURPLE }}
         >
           {count}
         </span>

@@ -236,14 +236,19 @@ export default function StubSlideView({
 
           {stub.dismissed && (
             <p className="text-xs text-muted self-start">
-              Won&apos;t send to Claude ·{" "}
-              <button
-                type="button"
-                onClick={() => onDismiss?.(stub.id, false)}
-                className="font-semibold text-foreground hover:underline"
-              >
-                Restore
-              </button>
+              Won&apos;t send to Claude
+              {canCurate && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    onClick={() => onDismiss?.(stub.id, false)}
+                    className="font-semibold text-foreground hover:underline"
+                  >
+                    Restore
+                  </button>
+                </>
+              )}
             </p>
           )}
 

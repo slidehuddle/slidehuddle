@@ -742,7 +742,7 @@ export default function SlideViewer({
         canInsert={canInsert}
         loginHref={loginHref}
         onInsertStub={handleInsertStub}
-        feedbackText={readOnly ? undefined : feedbackText}
+        feedbackText={canCurate ? feedbackText : undefined}
       />
 
       <div className="flex-1 flex flex-row min-h-0">

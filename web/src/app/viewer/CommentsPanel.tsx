@@ -319,14 +319,19 @@ export default function CommentsPanel({
                 </span>
                 {entry.flag.dismissed && (
                   <p className="text-xs" style={{ color: "#791F1F" }}>
-                    Won&apos;t send to Claude ·{" "}
-                    <button
-                      type="button"
-                      onClick={() => onFlagDismiss(entry.flag.id, false)}
-                      className="font-semibold underline"
-                    >
-                      Restore
-                    </button>
+                    Won&apos;t send to Claude
+                    {canCurate && (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          onClick={() => onFlagDismiss(entry.flag.id, false)}
+                          className="font-semibold underline"
+                        >
+                          Restore
+                        </button>
+                      </>
+                    )}
                   </p>
                 )}
                 {/* Flags get Dismiss only — there's no edit (the reason is just
@@ -439,17 +444,22 @@ export default function CommentsPanel({
                       }
                       strikethrough={entry.comment.dismissed}
                     />
-                    {/* Dismissed → show why + a way back. */}
+                    {/* Dismissed → show why. Only the owner can Restore. */}
                     {entry.comment.dismissed && (
                       <p className="text-xs text-muted">
-                        Won&apos;t send to Claude ·{" "}
-                        <button
-                          type="button"
-                          onClick={() => onDismiss(entry.comment.id, false)}
-                          className="font-semibold text-foreground hover:underline"
-                        >
-                          Restore
-                        </button>
+                        Won&apos;t send to Claude
+                        {canCurate && (
+                          <>
+                            {" · "}
+                            <button
+                              type="button"
+                              onClick={() => onDismiss(entry.comment.id, false)}
+                              className="font-semibold text-foreground hover:underline"
+                            >
+                              Restore
+                            </button>
+                          </>
+                        )}
                       </p>
                     )}
                     {canComment &&
