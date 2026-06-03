@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { after } from "next/server";
 import SlideViewer from "./SlideViewer";
 import TopNav from "@/components/TopNav";
 import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
@@ -37,7 +38,7 @@ export default async function ViewerPage({
   const { slides, id, source: sourceParam, v } = await searchParams;
   const isCaptureSource = sourceParam === "capture";
 
-  let html: string;
+  let html = "";
   let source: "param" | "stored" | "sample";
   // True only when loading the deck's HTML actually errored (vs. the deck not
   // existing, or having no slides) — lets the viewer show a distinct "couldn't
@@ -48,9 +49,9 @@ export default async function ViewerPage({
     html = slides;
     source = "param";
   } else if (id) {
-    const slidesLoad = await getStoredSlides(id);
-    html = slidesLoad.html ?? "";
-    deckLoadFailed = slidesLoad.failed;
+    // The deck HTML is loaded further down — AFTER we know whether a past
+    // version was requested — so we fetch a single snapshot (the one being
+    // viewed) rather than the current deck plus the historical one.
     source = "stored";
   } else {
     html = SAMPLE_SLIDES_HTML;
@@ -58,12 +59,9 @@ export default async function ViewerPage({
   }
 
   const supabase = await getSupabaseServer();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
   let currentUserId: string | null = null;
-  let currentUserEmail: string | null = user?.email ?? null;
+  let currentUserEmail: string | null = null;
   let initialComments: CommentRow[] = [];
   let initialStubs: StubRow[] = [];
   let initialFlags: FlagRow[] = [];
@@ -89,12 +87,18 @@ export default async function ViewerPage({
   let bannerDetail: string | null = null;
 
   if (source === "stored" && id) {
-    const [deck, stubsLoad, flagsLoad, versionsLoad] = await Promise.all([
-      getDeckMeta(id),
-      getStubsForDeck(id),
-      getFlagsForDeck(id),
-      getDeckVersions(id),
-    ]);
+    // One parallel round-trip for the session + all deck metadata, instead of
+    // fetching the user and then the metadata in sequence.
+    const [authRes, deck, stubsLoad, flagsLoad, versionsLoad] =
+      await Promise.all([
+        supabase.auth.getUser(),
+        getDeckMeta(id),
+        getStubsForDeck(id),
+        getFlagsForDeck(id),
+        getDeckVersions(id),
+      ]);
+    const user = authRes.data.user;
+    currentUserEmail = user?.email ?? null;
     initialStubs = stubsLoad.rows;
     initialFlags = flagsLoad.rows;
     loadErrors.stubs = stubsLoad.failed;
@@ -111,20 +115,26 @@ export default async function ViewerPage({
       createdAt: vv.created_at,
     }));
 
-    // Historical version view: ?v=N for a real, non-current version. Load that
-    // version's stored HTML and present it read-only.
+    // Load ONLY the snapshot we'll show: the requested past version, or the
+    // current deck — never both. (Previously the current HTML was always
+    // fetched first and then discarded when a past version was requested.)
     const requestedV = v ? parseInt(v, 10) : NaN;
-    if (
+    const wantsHistorical =
       Number.isFinite(requestedV) &&
       requestedV >= 1 &&
-      requestedV !== currentVersion
-    ) {
+      requestedV !== currentVersion;
+    if (wantsHistorical) {
       const vHtml = await getDeckVersionHtml(id, requestedV);
       if (vHtml) {
         html = vHtml;
         viewingVersion = requestedV;
         viewingHistorical = true;
       }
+    }
+    if (!viewingHistorical) {
+      const slidesLoad = await getStoredSlides(id);
+      html = slidesLoad.html ?? "";
+      deckLoadFailed = slidesLoad.failed;
     }
 
     if (user && deck) {
@@ -134,12 +144,20 @@ export default async function ViewerPage({
         await trackSharedDeck(id, user.id);
       }
       currentUserId = user.id;
-      currentUserEmail = user.email ?? null;
 
-      // Decide the "updated since you last viewed it" banner BEFORE recording
-      // this view (which advances the timestamp). Current version only.
+      // Comments + the "updated since you last viewed it" banner only apply to
+      // the current deck (not a historical view).
       if (!viewingHistorical) {
-        const prior = await getDeckView(id, user.id);
+        // The prior-view timestamp and the comments are independent reads —
+        // fetch them together. (Read getDeckView BEFORE recordDeckView below so
+        // the banner still sees the pre-update timestamp.)
+        const [prior, commentsLoad] = await Promise.all([
+          getDeckView(id, user.id),
+          getCommentsForDeck(id, user.id),
+        ]);
+        initialComments = commentsLoad.rows;
+        loadErrors.comments = commentsLoad.failed;
+
         const stamps: VersionStamp[] = versions.map((vv) => ({
           version: vv.version,
           created_at: vv.created_at,
@@ -161,15 +179,19 @@ export default async function ViewerPage({
             change,
           );
         }
-
-        // Comments only make sense on the current deck.
-        const commentsLoad = await getCommentsForDeck(id, user.id);
-        initialComments = commentsLoad.rows;
-        loadErrors.comments = commentsLoad.failed;
       }
 
-      await recordDeckView(id, user.id);
+      // Recording the view is a write the reader doesn't need to wait for, so
+      // run it AFTER the response is sent — off the render critical path.
+      const viewerUserId = user.id;
+      after(() => recordDeckView(id, viewerUserId));
     }
+  } else {
+    // param / sample sources still need the session for the top-nav state.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    currentUserEmail = user?.email ?? null;
   }
 
   // Viewing a past version → read-only: pass deckId=null so collaboration
