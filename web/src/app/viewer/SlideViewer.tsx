@@ -506,27 +506,6 @@ export default function SlideViewer({
     }
   }
 
-  // Owner-only: set/clear the owner's edited removal reason for a flag.
-  async function handleEditFlag(
-    flagId: string,
-    ownerEditedReason: string | null,
-  ) {
-    if (!deckId) return;
-    const snapshot = flags;
-    setFlags((prev) =>
-      prev.map((f) =>
-        f.id === flagId ? { ...f, owner_edited_reason: ownerEditedReason } : f,
-      ),
-    );
-    const res = await setFlagCurationAction(deckId, flagId, {
-      owner_edited_reason: ownerEditedReason,
-    });
-    if (!res.ok) {
-      console.error("[SlideViewer] flag edit failed:", res.error);
-      setFlags(snapshot);
-    }
-  }
-
   // A real failure loading the deck's HTML takes precedence over everything —
   // even if requested-slide stubs exist, showing them alone would misleadingly
   // imply the deck loaded fine. (deck.slides is empty when the load errored;
@@ -792,7 +771,6 @@ export default function SlideViewer({
             onDismiss={handleDismissComment}
             onEdit={handleEditComment}
             onFlagDismiss={handleDismissFlag}
-            onFlagEdit={handleEditFlag}
             onClose={() => setCommentsOpen(false)}
           />
         )}

@@ -67,9 +67,8 @@ type Props = {
   onDismiss: (id: string, dismissed: boolean) => Promise<void>;
   /** Owner curation: set (or clear, via null) the edited text sent to Claude. */
   onEdit: (id: string, ownerEditedBody: string | null) => Promise<void>;
-  /** Owner curation of the slide's removal flag. */
+  /** Owner curation of the slide's removal flag (dismiss only). */
   onFlagDismiss: (id: string, dismissed: boolean) => Promise<void>;
-  onFlagEdit: (id: string, ownerEditedReason: string | null) => Promise<void>;
   onClose: () => void;
 };
 
@@ -136,7 +135,6 @@ export default function CommentsPanel({
   onDismiss,
   onEdit,
   onFlagDismiss,
-  onFlagEdit,
   onClose,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -305,143 +303,69 @@ export default function CommentsPanel({
                     {formatRelativeTime(entry.flag.created_at)}
                   </time>
                 </div>
-                {editingId === entry.flag.id ? (
-                  <div className="flex flex-col gap-2">
-                    <textarea
-                      value={editDraft}
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      rows={2}
-                      maxLength={4000}
-                      autoFocus
-                      placeholder="Reason sent to Claude…"
-                      className="rounded-lg border border-[#e3b9b9] bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[#791F1F]/20 resize-none"
-                    />
-                    <p className="text-[11px]" style={{ color: "#791F1F" }}>
-                      Only changes what&apos;s sent to Claude —{" "}
-                      {authorName(entry.flag.flagged_by_email)}&apos;s reason
-                      stays as written.
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const text = editDraft.trim();
-                          await onFlagEdit(entry.flag.id, text || null);
-                          setEditingId(null);
-                        }}
-                        className="inline-flex items-center rounded-lg text-white text-xs font-semibold px-3 py-1.5"
-                        style={{ backgroundColor: "#791F1F" }}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        className="text-xs"
-                        style={{ color: "#791F1F" }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {(entry.flag.owner_edited_reason ?? entry.flag.reason) && (
-                      <p
-                        className={`text-sm whitespace-pre-wrap break-words ${entry.flag.dismissed ? "line-through" : ""}`}
-                        style={{ color: "#791F1F" }}
-                      >
-                        {entry.flag.owner_edited_reason ?? entry.flag.reason}
-                      </p>
-                    )}
-                    <span
-                      className="text-xs"
-                      style={{ color: "#791F1F", opacity: 0.85 }}
+                {(entry.flag.owner_edited_reason ?? entry.flag.reason) && (
+                  <p
+                    className={`text-sm whitespace-pre-wrap break-words ${entry.flag.dismissed ? "line-through" : ""}`}
+                    style={{ color: "#791F1F" }}
+                  >
+                    {entry.flag.owner_edited_reason ?? entry.flag.reason}
+                  </p>
+                )}
+                <span
+                  className="text-xs"
+                  style={{ color: "#791F1F", opacity: 0.85 }}
+                >
+                  by {authorName(entry.flag.flagged_by_email)}
+                </span>
+                {entry.flag.dismissed && (
+                  <p className="text-xs" style={{ color: "#791F1F" }}>
+                    Won&apos;t send to Claude ·{" "}
+                    <button
+                      type="button"
+                      onClick={() => onFlagDismiss(entry.flag.id, false)}
+                      className="font-semibold underline"
                     >
-                      by {authorName(entry.flag.flagged_by_email)}
-                    </span>
-                    {entry.flag.dismissed && (
-                      <p className="text-xs" style={{ color: "#791F1F" }}>
-                        Won&apos;t send to Claude ·{" "}
-                        <button
-                          type="button"
-                          onClick={() => onFlagDismiss(entry.flag.id, false)}
-                          className="font-semibold underline"
-                        >
-                          Restore
-                        </button>
-                      </p>
-                    )}
-                    {canCurate && !entry.flag.dismissed && (
-                      <div
-                        className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pr-3 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
-                        style={{
-                          background:
-                            "linear-gradient(to right, transparent, #FCEBEB 45%)",
-                        }}
+                      Restore
+                    </button>
+                  </p>
+                )}
+                {/* Flags get Dismiss only — there's no edit (the reason is just
+                    a removal note). */}
+                {canCurate && !entry.flag.dismissed && (
+                  <div
+                    className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pr-3 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+                    style={{
+                      background:
+                        "linear-gradient(to right, transparent, #FCEBEB 45%)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onFlagDismiss(entry.flag.id, true)}
+                      aria-label="Dismiss — won't send to Claude"
+                      title="Dismiss — won't send to Claude"
+                      className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+                      style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
+                    >
+                      <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
                       >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingId(entry.flag.id);
-                            setEditDraft(
-                              entry.flag.owner_edited_reason ??
-                                entry.flag.reason ??
-                                "",
-                            );
-                          }}
-                          aria-label="Edit what's sent to Claude"
-                          title="Edit what's sent to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
-                        >
-                          <svg
-                            width="15"
-                            height="15"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
-                          >
-                            <path d="M12 20h9" />
-                            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
-                          </svg>
-                          <span className="text-[8px] font-semibold leading-none">
-                            Edit
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onFlagDismiss(entry.flag.id, true)}
-                          aria-label="Dismiss — won't send to Claude"
-                          title="Dismiss — won't send to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
-                        >
-                          <svg
-                            width="15"
-                            height="15"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
-                          >
-                            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
-                            <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
-                          </svg>
-                          <span className="text-[8px] font-semibold leading-none">
-                            Dismiss
-                          </span>
-                        </button>
-                      </div>
-                    )}
-                  </>
+                        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
+                        <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+                      </svg>
+                      <span className="text-[8px] font-semibold leading-none">
+                        Dismiss
+                      </span>
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (
@@ -481,9 +405,8 @@ export default function CommentsPanel({
                       className="rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
                     />
                     <p className="text-[11px] text-muted leading-snug">
-                      Only changes what&apos;s sent to Claude —{" "}
-                      {authorName(entry.comment.author_email)}&apos;s comment
-                      stays as written.
+                      Changes what&apos;s sent to Claude — the original comment
+                      won&apos;t change.
                     </p>
                     <div className="flex items-center gap-3">
                       <button
@@ -530,6 +453,7 @@ export default function CommentsPanel({
                       </p>
                     )}
                     {canComment &&
+                      !entry.comment.dismissed &&
                       entry.comment.user_id === currentUserId && (
                         <button
                           type="button"
@@ -562,8 +486,8 @@ export default function CommentsPanel({
                           }}
                           aria-label="Edit what's sent to Claude"
                           title="Edit what's sent to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+                          style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
                         >
                           <svg
                             width="15"
@@ -588,8 +512,8 @@ export default function CommentsPanel({
                           onClick={() => onDismiss(entry.comment.id, true)}
                           aria-label="Dismiss — won't send to Claude"
                           title="Dismiss — won't send to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+                          style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
                         >
                           <svg
                             width="15"

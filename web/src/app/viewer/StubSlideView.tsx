@@ -306,8 +306,8 @@ export default function StubSlideView({
             }}
             aria-label="Edit what's sent to Claude"
             title="Edit what's sent to Claude"
-            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-            style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+            style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
           >
             <svg
               width="15"
@@ -330,8 +330,8 @@ export default function StubSlideView({
             onClick={() => onDismiss?.(stub.id, true)}
             aria-label="Dismiss — won't send to Claude"
             title="Dismiss — won't send to Claude"
-            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
-            style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+            className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+            style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
           >
             <svg
               width="15"
