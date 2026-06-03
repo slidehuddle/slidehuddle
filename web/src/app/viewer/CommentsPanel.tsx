@@ -68,6 +68,26 @@ function formatTime(iso: string): string {
   });
 }
 
+// Short, muted relative time for a comment: "just now" (<1m), "3m", "2h",
+// "yesterday", then a short date for anything older. `now` is injected so it
+// stays a pure function (and testable); defaults to the current time.
+function formatRelativeTime(iso: string, now: number = Date.now()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const sec = Math.max(0, Math.floor((now - then) / 1000));
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return "yesterday";
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function authorName(email: string | null): string {
   if (!email) return "Someone";
   return email.split("@")[0] || email;
@@ -134,6 +154,17 @@ export default function CommentsPanel({
           <h2 className="text-sm font-semibold text-foreground">
             Slide {slideLabel}
           </h2>
+          {/* Comment-count pill — all comments on this slide (including any the
+              owner dismissed; they're still here). Hidden when there are none. */}
+          {!isStub && comments.length > 0 && (
+            <span
+              aria-label={`${comments.length} comment${comments.length === 1 ? "" : "s"} on this slide`}
+              className="inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none"
+              style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
+            >
+              {comments.length}
+            </span>
+          )}
           {isStub && (
             <span
               className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
@@ -263,8 +294,11 @@ export default function CommentsPanel({
                   <span className="text-xs font-semibold text-foreground truncate">
                     {authorName(entry.comment.author_email)}
                   </span>
-                  <time className="text-xs text-muted shrink-0 ml-auto">
-                    {formatTime(entry.comment.created_at)}
+                  <time
+                    title={formatTime(entry.comment.created_at)}
+                    className="text-xs text-muted shrink-0 ml-auto"
+                  >
+                    {formatRelativeTime(entry.comment.created_at)}
                   </time>
                 </div>
                 <CommentBody body={entry.comment.body} />
