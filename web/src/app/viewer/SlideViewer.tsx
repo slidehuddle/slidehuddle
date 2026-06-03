@@ -8,7 +8,7 @@ import SlideFlagControl from "./SlideFlagControl";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt } from "./feedback-prompt";
-import { deleteStubAction } from "./actions";
+import { deleteStubAction, setCommentCurationAction } from "./actions";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
 // "a, b, and c" — for the load-error banner's list of failed datasets.
@@ -232,6 +232,9 @@ export default function SlideViewer({
   const canComment = !!(deckId && currentUserId) && !readOnly;
   const canInsert = !!(deckId && currentUserId) && !readOnly;
   const canFlag = !!(deckId && currentUserId) && !readOnly;
+  // The deck owner can curate feedback (dismiss/edit) on the current deck only,
+  // never on a read-only historical view.
+  const canCurate = isOwner && !readOnly && !!deckId;
 
   // AI-loop actions. The feedback prompt aggregates ALL slides' comments,
   // requested stubs, and removal flags (not just the active slide). Only shown
@@ -239,7 +242,18 @@ export default function SlideViewer({
   const feedbackText = useMemo(
     () =>
       isStored
-        ? buildFeedbackPrompt({ comments, flags, stubs })
+        ? buildFeedbackPrompt({
+            // Only included (non-dismissed) comments are sent, using the
+            // owner's edited text where present.
+            comments: comments
+              .filter((c) => !c.dismissed)
+              .map((c) => ({
+                slide_index: c.slide_index,
+                body: c.owner_edited_body ?? c.body,
+              })),
+            flags,
+            stubs,
+          })
         : undefined,
     [isStored, comments, flags, stubs],
   );
@@ -257,6 +271,8 @@ export default function SlideViewer({
       body,
       created_at: new Date().toISOString(),
       version: viewingVersion,
+      dismissed: false,
+      owner_edited_body: null,
     };
     setComments((prev) => [...prev, optimistic]);
     const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
@@ -272,7 +288,7 @@ export default function SlideViewer({
         version: viewingVersion,
       })
       .select(
-        "id, deck_id, user_id, author_email, slide_index, body, created_at, version",
+        "id, deck_id, user_id, author_email, slide_index, body, created_at, version, dismissed, owner_edited_body",
       )
       .single();
     if (error) {
@@ -293,6 +309,22 @@ export default function SlideViewer({
     const { error } = await supabase.from("comments").delete().eq("id", id);
     if (error) {
       console.error("[SlideViewer] comment delete failed:", error);
+      setComments(snapshot);
+    }
+  }
+
+  // Owner-only: dismiss (exclude from Claude) or restore a comment. Optimistic:
+  // flip the flag locally, then persist via the owner-checked server action;
+  // revert on failure. The original author's text is untouched.
+  async function handleDismissComment(id: string, dismissed: boolean) {
+    if (!deckId) return;
+    const snapshot = comments;
+    setComments((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, dismissed } : c)),
+    );
+    const res = await setCommentCurationAction(deckId, id, { dismissed });
+    if (!res.ok) {
+      console.error("[SlideViewer] comment dismiss failed:", res.error);
       setComments(snapshot);
     }
   }
@@ -639,11 +671,13 @@ export default function SlideViewer({
             flag={activeFlag}
             comments={visibleComments}
             canComment={canComment}
+            canCurate={canCurate}
             readOnly={readOnly}
             currentUserId={currentUserId}
             loginHref={loginHref}
             onAdd={handleAddComment}
             onDelete={handleDeleteComment}
+            onDismiss={handleDismissComment}
             onClose={() => setCommentsOpen(false)}
           />
         )}

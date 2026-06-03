@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CommentRow, FlagRow } from "@/lib/slide-store";
 
-function CommentBody({ body }: { body: string }) {
+function CommentBody({
+  body,
+  strikethrough = false,
+}: {
+  body: string;
+  strikethrough?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const ref = useRef<HTMLParagraphElement>(null);
@@ -22,7 +28,7 @@ function CommentBody({ body }: { body: string }) {
     <div className="flex flex-col gap-1">
       <p
         ref={ref}
-        className={`text-sm text-foreground whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-5"}`}
+        className={`text-sm whitespace-pre-wrap break-words ${strikethrough ? "line-through text-muted" : "text-foreground"} ${expanded ? "" : "line-clamp-5"}`}
       >
         {body}
       </p>
@@ -48,6 +54,8 @@ type Props = {
   flag: FlagRow | null;
   comments: CommentRow[];
   canComment: boolean;
+  /** Deck owner on the current deck: reveals hover Dismiss/Edit controls. */
+  canCurate?: boolean;
   /** Viewing a past version: comments are visible but can't be added. Drives a
    *  "read-only" footer instead of the "sign in to comment" prompt. */
   readOnly?: boolean;
@@ -55,6 +63,8 @@ type Props = {
   loginHref: string;
   onAdd: (body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  /** Owner curation: toggle whether a comment is sent to Claude. */
+  onDismiss: (id: string, dismissed: boolean) => Promise<void>;
   onClose: () => void;
 };
 
@@ -112,11 +122,13 @@ export default function CommentsPanel({
   flag,
   comments,
   canComment,
+  canCurate = false,
   readOnly = false,
   currentUserId,
   loginHref,
   onAdd,
   onDelete,
+  onDismiss,
   onClose,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -288,7 +300,10 @@ export default function CommentsPanel({
                 </span>
               </div>
             ) : (
-              <article key={entry.comment.id} className="flex flex-col gap-1">
+              <article
+                key={entry.comment.id}
+                className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""}`}
+              >
                 <div className="flex items-center gap-2">
                   <Avatar email={entry.comment.author_email} />
                   <span className="text-xs font-semibold text-foreground truncate">
@@ -301,7 +316,23 @@ export default function CommentsPanel({
                     {formatRelativeTime(entry.comment.created_at)}
                   </time>
                 </div>
-                <CommentBody body={entry.comment.body} />
+                <CommentBody
+                  body={entry.comment.owner_edited_body ?? entry.comment.body}
+                  strikethrough={entry.comment.dismissed}
+                />
+                {/* Dismissed → show why + a way back. */}
+                {entry.comment.dismissed && (
+                  <p className="text-xs text-muted">
+                    Won&apos;t send to Claude ·{" "}
+                    <button
+                      type="button"
+                      onClick={() => onDismiss(entry.comment.id, false)}
+                      className="font-semibold text-foreground hover:underline"
+                    >
+                      Restore
+                    </button>
+                  </p>
+                )}
                 {canComment && entry.comment.user_id === currentUserId && (
                   <button
                     type="button"
@@ -310,6 +341,45 @@ export default function CommentsPanel({
                   >
                     Delete
                   </button>
+                )}
+                {/* Owner-only hover controls. Greyscale, overlaying the right of
+                    the comment with a left-to-right fade so the start stays
+                    readable. Hidden once dismissed (Restore lives inline). */}
+                {canCurate && !entry.comment.dismissed && (
+                  <div
+                    className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+                    style={{
+                      background:
+                        "linear-gradient(to right, transparent, #ffffff 45%)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onDismiss(entry.comment.id, true)}
+                      aria-label="Dismiss — won't send to Claude"
+                      title="Dismiss — won't send to Claude"
+                      className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md transition-transform hover:scale-105"
+                      style={{ backgroundColor: "rgba(40,40,38,0.92)" }}
+                    >
+                      <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
+                        <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+                      </svg>
+                      <span className="text-[8px] font-semibold leading-none">
+                        Dismiss
+                      </span>
+                    </button>
+                  </div>
                 )}
               </article>
             ),

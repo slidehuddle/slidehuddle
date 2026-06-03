@@ -610,6 +610,11 @@ export type CommentRow = {
   /** Which deck version this comment was written on. Comments are shown only
    *  while viewing the version they belong to. */
   version: number;
+  /** Owner curation: excluded from the Claude prompt (still shown in panel). */
+  dismissed: boolean;
+  /** Owner curation: owner's edited text sent to Claude. null = unedited; the
+   *  original author's words always remain in `body`. */
+  owner_edited_body: string | null;
 };
 
 // Fetch every comment the signed-in user can see for a deck, ordered by
@@ -647,7 +652,7 @@ export async function getCommentsForDeck(
   const { data, error } = await supabase
     .from("comments")
     .select(
-      "id, deck_id, user_id, author_email, slide_index, body, created_at, version",
+      "id, deck_id, user_id, author_email, slide_index, body, created_at, version, dismissed, owner_edited_body",
     )
     .eq("deck_id", deckId)
     .eq("version", version)
@@ -658,6 +663,64 @@ export async function getCommentsForDeck(
     return { rows: [], failed: true };
   }
   return { rows: (data ?? []) as CommentRow[], failed: false };
+}
+
+// Owner-only curation of a comment: toggle `dismissed` and/or set the owner's
+// edited text. Only the DECK OWNER may do this (the original author's `body` is
+// never touched). Mirrors deleteStub's "verify deck, enforce ownership with the
+// service-role client" shape. deckId comes from the client, so the comment is
+// re-checked to belong to it.
+export async function setCommentCuration(
+  deckId: string,
+  commentId: string,
+  userId: string,
+  patch: { dismissed?: boolean; owner_edited_body?: string | null },
+): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: comment, error: readErr } = await supabase
+    .from("comments")
+    .select("id, deck_id")
+    .eq("id", commentId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] comment read failed:", readErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!comment || comment.deck_id !== deckId) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const { data: deck, error: deckErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (deckErr) {
+    console.error("[slide-store] deck read failed:", deckErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!deck || deck.user_id !== userId) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  // Whitelist curation fields only — never write the original `body`.
+  const update: { dismissed?: boolean; owner_edited_body?: string | null } = {};
+  if (typeof patch.dismissed === "boolean") update.dismissed = patch.dismissed;
+  if ("owner_edited_body" in patch) {
+    update.owner_edited_body = patch.owner_edited_body;
+  }
+  if (Object.keys(update).length === 0) return { ok: true };
+
+  const { error: updErr } = await supabase
+    .from("comments")
+    .update(update)
+    .eq("id", commentId);
+  if (updErr) {
+    console.error("[slide-store] comment curation update failed:", updErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
 }
 
 type DbError = {
