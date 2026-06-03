@@ -385,7 +385,20 @@ export default function ThumbnailStrip({
   }
 
   function renderGap(gapIndex: number) {
-    if (!showInsert) return null;
+    // Read-only strips (a historical version) have no insert affordance, but
+    // the thumbnail spacing is created BY these gaps — so render an inert
+    // spacer of the same width to keep the rhythm identical to the editable
+    // strip instead of letting the thumbnails bunch together.
+    if (!showInsert) {
+      return (
+        <div
+          key={`gap-${gapIndex}`}
+          aria-hidden="true"
+          className="shrink-0"
+          style={{ width: 18 }}
+        />
+      );
+    }
     return (
       <InsertGap
         key={`gap-${gapIndex}`}
