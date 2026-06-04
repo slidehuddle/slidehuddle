@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import {
@@ -6,6 +5,7 @@ import {
   getDeckShareCounts,
   getOwnerEmails,
 } from "@/lib/slide-store";
+import DashboardDecks, { type DeckCardData } from "./DashboardDecks";
 
 type DeckRow = {
   id: string;
@@ -41,112 +41,6 @@ function deckMeta(deck: DeckRow, dateOverride?: string): string {
     );
   }
   return parts.join(" · ");
-}
-
-function DeckCard({
-  deck,
-  meta,
-  accent,
-  ownerEmail,
-  shareCount,
-  commentTotal,
-  commentUnread,
-}: {
-  deck: DeckRow;
-  meta: string;
-  accent: "brand" | "muted";
-  ownerEmail?: string;
-  shareCount?: number;
-  commentTotal?: number;
-  commentUnread?: number;
-}) {
-  const accentBase = accent === "brand" ? "bg-brand/30" : "bg-muted/30";
-  const accentHover =
-    accent === "brand" ? "group-hover:bg-brand" : "group-hover:bg-muted";
-  // More than one version exists → show a version pill and a stacked-card hint.
-  const version = deck.version ?? 1;
-  const hasVersions = version > 1;
-  return (
-    <li>
-      <div className="relative h-full">
-        {/* Stacked-card hint: faint offset card edges behind the real card,
-            signalling that earlier versions sit underneath. Purely decorative. */}
-        {hasVersions && (
-          <>
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 rounded-2xl border border-border bg-white translate-x-[10px] translate-y-[10px]"
-            />
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 rounded-2xl border border-border bg-white translate-x-[5px] translate-y-[5px]"
-            />
-          </>
-        )}
-        <Link
-          href={`/viewer?id=${deck.id}`}
-          className="group relative z-10 flex flex-col gap-3 h-full rounded-2xl border border-border bg-white p-5 hover:border-brand hover:bg-brand/[0.03] transition-colors"
-        >
-          {/* Latest version available, as a black-on-white pill. */}
-          {hasVersions && (
-            <span
-              aria-label={`Latest version: v${version}`}
-              className="absolute top-4 right-4 inline-flex items-center rounded-full border border-border bg-white px-2 py-0.5 text-[11px] font-bold text-[#1D1D1B] shadow-sm"
-            >
-              v{version}
-            </span>
-          )}
-          <span
-            className={`inline-block h-1.5 w-10 rounded-full ${accentBase} ${accentHover} transition-colors`}
-          />
-          <span className="font-semibold text-foreground line-clamp-2 min-h-[3rem] leading-tight">
-            {deck.title || "Untitled deck"}
-          </span>
-        <div className="mt-auto flex flex-col gap-1">
-          <span className="text-sm text-muted">{meta}</span>
-          {ownerEmail && (
-            <span className="text-xs text-muted">
-              from{" "}
-              <span className="text-foreground font-medium">{ownerEmail}</span>
-            </span>
-          )}
-          {shareCount != null && shareCount > 0 && (
-            <span className="text-xs text-muted">
-              Shared with {shareCount} {shareCount === 1 ? "person" : "people"}
-            </span>
-          )}
-          {commentTotal != null && commentTotal > 0 && (
-            <span className="text-xs text-muted flex items-center gap-1.5">
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-              {commentTotal} {commentTotal === 1 ? "comment" : "comments"}
-              {commentUnread != null && commentUnread > 0 && (
-                <span className="inline-flex items-center gap-1 text-red-600 font-semibold">
-                  <span
-                    aria-hidden="true"
-                    className="h-1.5 w-1.5 rounded-full bg-red-600"
-                  />
-                  {commentUnread} new
-                </span>
-              )}
-            </span>
-          )}
-          </div>
-        </Link>
-      </div>
-    </li>
-  );
 }
 
 export default async function DashboardPage() {
@@ -217,7 +111,39 @@ export default async function DashboardPage() {
   // every deck silently read as "0 comments".
   const commentCountsFailed = commentCountsResult.failed;
 
-  const bothEmpty = ownDecks.length === 0 && sharedRows.length === 0;
+  // Shape serializable card data for the client component (which owns the
+  // hover-delete / confirm / undo interactions).
+  const ownedCards: DeckCardData[] = ownDecks.map((deck) => {
+    const cc = commentCountsByDeck[deck.id];
+    return {
+      id: deck.id,
+      title: deck.title,
+      meta: deckMeta(deck),
+      role: "owner",
+      shareCount: shareCountByDeck[deck.id] ?? 0,
+      commentTotal: cc?.total ?? 0,
+      commentUnread: cc?.unread ?? 0,
+      version: deck.version ?? 1,
+    };
+  });
+
+  const sharedCards: DeckCardData[] = sharedRows.map((row) => {
+    const deck = row.deck!;
+    const cc = commentCountsByDeck[deck.id];
+    return {
+      id: deck.id,
+      title: deck.title,
+      // Sort/display by when *they* received the share, not when the deck was
+      // originally created.
+      meta: deckMeta(deck, row.created_at),
+      role: "shared",
+      ownerEmail: deck.user_id ? emailByOwnerId[deck.user_id] : undefined,
+      shareCount: shareCountByDeck[deck.id] ?? 0,
+      commentTotal: cc?.total ?? 0,
+      commentUnread: cc?.unread ?? 0,
+      version: deck.version ?? 1,
+    };
+  });
 
   return (
     <main className="flex-1 flex flex-col">
@@ -258,77 +184,7 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        {bothEmpty ? (
-          <div className="rounded-2xl border border-dashed border-border px-8 py-16 text-center flex flex-col items-center gap-3">
-            <h2 className="text-lg font-semibold text-foreground">
-              No decks yet
-            </h2>
-            <p className="text-muted max-w-md">
-              Go to Claude.ai and create a presentation, then click{" "}
-              <span className="font-semibold text-foreground">
-                Open in SlideHuddle
-              </span>
-              .
-            </p>
-          </div>
-        ) : (
-          <>
-            {ownDecks.length > 0 && (
-              <section className="flex flex-col gap-4">
-                <h2 className="text-lg font-semibold text-foreground">
-                  My decks
-                </h2>
-                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {ownDecks.map((deck) => {
-                    const cc = commentCountsByDeck[deck.id];
-                    return (
-                      <DeckCard
-                        key={deck.id}
-                        deck={deck}
-                        meta={deckMeta(deck)}
-                        accent="brand"
-                        shareCount={shareCountByDeck[deck.id] ?? 0}
-                        commentTotal={cc?.total ?? 0}
-                        commentUnread={cc?.unread ?? 0}
-                      />
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
-
-            {sharedRows.length > 0 && (
-              <section className="flex flex-col gap-4">
-                <h2 className="text-lg font-semibold text-foreground">
-                  Shared with me
-                </h2>
-                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {sharedRows.map((row) => {
-                    const deck = row.deck!;
-                    const ownerEmail = deck.user_id
-                      ? emailByOwnerId[deck.user_id]
-                      : undefined;
-                    const cc = commentCountsByDeck[deck.id];
-                    return (
-                      <DeckCard
-                        key={deck.id}
-                        deck={deck}
-                        // Sort/display by when *they* received the share,
-                        // not when the deck was originally created.
-                        meta={deckMeta(deck, row.created_at)}
-                        accent="muted"
-                        ownerEmail={ownerEmail}
-                        shareCount={shareCountByDeck[deck.id] ?? 0}
-                        commentTotal={cc?.total ?? 0}
-                        commentUnread={cc?.unread ?? 0}
-                      />
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
-          </>
-        )}
+        <DashboardDecks owned={ownedCards} shared={sharedCards} />
       </section>
     </main>
   );

@@ -441,6 +441,66 @@ export async function claimOrphanDeck(
   return Array.isArray(data) && data.length > 0;
 }
 
+export type DeleteDeckResult =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "forbidden" | "error" };
+
+// Permanently delete a deck — owner only. All child rows (comments, versions,
+// stubs, flags, views, and every collaborator's shared_decks link) are removed
+// automatically via ON DELETE CASCADE, so this single delete clears the deck
+// for everyone. Ownership is enforced here with the service-role client; the
+// userId comes from the server session (never trusted from the client).
+export async function deleteDeck(
+  deckId: string,
+  userId: string,
+): Promise<DeleteDeckResult> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: deck, error: readErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] deck read failed (delete):", readErr);
+    return { ok: false, reason: "error" };
+  }
+  if (!deck) return { ok: false, reason: "not_found" };
+  // Only the owner may delete the deck itself. A collaborator who wants it gone
+  // from their dashboard uses removeSharedDeck instead.
+  if (deck.user_id !== userId) return { ok: false, reason: "forbidden" };
+
+  const { error: delErr } = await supabase
+    .from("decks")
+    .delete()
+    .eq("id", deckId);
+  if (delErr) {
+    console.error("[slide-store] deck delete failed:", delErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
+}
+
+// Remove a deck from one collaborator's dashboard by deleting only THEIR
+// shared_decks link. The deck and every other recipient are untouched. Scoped
+// to the caller's own row (deck_id + user_id), so it can never affect others.
+export async function removeSharedDeck(
+  deckId: string,
+  userId: string,
+): Promise<{ ok: boolean }> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("shared_decks")
+    .delete()
+    .eq("deck_id", deckId)
+    .eq("user_id", userId);
+  if (error) {
+    console.error("[slide-store] remove-shared-deck failed:", error);
+    return { ok: false };
+  }
+  return { ok: true };
+}
+
 // Record that a signed-in user has accessed a deck they don't own, so it
 // appears in their dashboard under "Shared with me". Idempotent — repeat
 // visits don't add duplicate rows (primary key is (deck_id, user_id)).
