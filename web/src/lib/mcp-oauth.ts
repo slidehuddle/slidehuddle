@@ -46,7 +46,11 @@ function secret(): string {
 
 // --- Lifetimes ------------------------------------------------------------
 const CLIENT_TTL_MS = 365 * 24 * 60 * 60 * 1000; // a registration lasts a year
-const CODE_TTL_MS = 5 * 60 * 1000; // authorization code: 5 minutes
+// Authorization code: 60 seconds. Kept short because codes are single-use only
+// by virtue of expiry (we store no used-codes list). PKCE already makes a
+// stolen code useless to anyone but the real client; the short window further
+// shrinks any replay opportunity.
+const CODE_TTL_MS = 60 * 1000;
 const ACCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000; // access token: 30 days
 export const ACCESS_TTL_SECONDS = Math.floor(ACCESS_TTL_MS / 1000);
 
@@ -108,15 +112,25 @@ function verify<T extends { t: string; e: number }>(
 }
 
 // --- Client registration (DCR) -------------------------------------------
-type ClientPayload = { t: "client"; ru: string[]; e: number };
+// `n` is the client's self-reported name, captured at registration. It's
+// signed into the client_id so it can't be altered afterwards — but note it is
+// still SELF-REPORTED (a malicious app can call itself anything), so the
+// consent screen treats the redirect host as the authoritative trust signal
+// and the name as secondary.
+type ClientPayload = { t: "client"; ru: string[]; n?: string; e: number };
+
+const MAX_CLIENT_NAME_LENGTH = 120;
 
 /**
  * Mint a client_id for a dynamically-registered OAuth client. The id encodes
- * the client's allowed redirect URIs, so we can validate redirect_uri at
- * /authorize and /token without storing anything. Returns null if the redirect
- * URIs are missing/invalid.
+ * the client's allowed redirect URIs (and optional name), so we can validate
+ * redirect_uri and show the requester at /authorize without storing anything.
+ * Returns null if the redirect URIs are missing/invalid.
  */
-export function mintClientId(redirectUris: unknown): string | null {
+export function mintClientId(
+  redirectUris: unknown,
+  clientName?: unknown,
+): string | null {
   if (!Array.isArray(redirectUris) || redirectUris.length === 0) return null;
   if (redirectUris.length > MAX_REDIRECT_URIS) return null;
   const uris: string[] = [];
@@ -138,16 +152,28 @@ export function mintClientId(redirectUris: unknown): string | null {
     }
     uris.push(u);
   }
-  return mint({ t: "client", ru: uris, e: Date.now() + CLIENT_TTL_MS });
+  const name =
+    typeof clientName === "string" && clientName.trim()
+      ? clientName.trim().slice(0, MAX_CLIENT_NAME_LENGTH)
+      : undefined;
+  return mint({
+    t: "client",
+    ru: uris,
+    ...(name ? { n: name } : {}),
+    e: Date.now() + CLIENT_TTL_MS,
+  });
 }
 
-/** Decode a client_id back to its allowed redirect URIs, or null if invalid. */
+/** Decode a client_id back to its allowed redirect URIs + name, or null. */
 export function parseClientId(
   clientId: string | null | undefined,
-): { redirectUris: string[] } | null {
+): { redirectUris: string[]; clientName: string | null } | null {
   const p = verify<ClientPayload>(clientId, "client");
   if (!p || !Array.isArray(p.ru)) return null;
-  return { redirectUris: p.ru };
+  return {
+    redirectUris: p.ru,
+    clientName: typeof p.n === "string" ? p.n : null,
+  };
 }
 
 /** True iff `redirectUri` is one this client registered (exact match). */

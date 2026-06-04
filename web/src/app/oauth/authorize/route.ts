@@ -19,7 +19,7 @@
 
 import { getPublicOrigin } from "mcp-handler";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { clientAllowsRedirect, mintAuthCode } from "@/lib/mcp-oauth";
+import { clientAllowsRedirect, mintAuthCode, parseClientId } from "@/lib/mcp-oauth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -183,14 +183,31 @@ export async function GET(req: Request): Promise<Response> {
   // Signed in → render the consent screen. All params are re-submitted as
   // hidden fields so the POST re-validates them.
   const email = user.email ?? "your account";
+  // The destination host is where the access token will actually be sent, so
+  // it's the authoritative trust signal — show it prominently. The app name is
+  // self-reported at registration, so it's shown only as secondary context.
+  let destHost: string;
+  try {
+    destHost = new URL(params.redirectUri).host;
+  } catch {
+    destHost = params.redirectUri;
+  }
+  const appName = parseClientId(params.clientId)?.clientName ?? null;
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
   return htmlPage(
     "Connect to SlideHuddle",
     `<h1>Connect to SlideHuddle</h1>
-     <p>An AI assistant wants to access <strong>${escapeHtml(email)}</strong>'s
+     <p>An app wants to access <strong>${escapeHtml(email)}</strong>'s
         SlideHuddle account — to create decks, read your team's feedback, and
         save revisions on your behalf.</p>
+     <div style="border:1px solid #e6e6ea;border-radius:10px;padding:12px 14px;margin:0 0 16px;background:#faf9ff">
+       <div style="font-size:13px;color:#8a8a93;margin-bottom:2px">Connecting to</div>
+       <div style="font-size:16px;font-weight:700;color:${BRAND};word-break:break-all">${escapeHtml(destHost)}</div>
+       ${appName ? `<div style="font-size:13px;color:#55555f;margin-top:4px">App name (self-reported): ${escapeHtml(appName)}</div>` : ""}
+     </div>
+     <p class="muted">Only continue if you recognise this destination — your
+        access token will be sent to <strong>${escapeHtml(destHost)}</strong>.</p>
      <form method="POST">
        ${hidden("client_id", params.clientId)}
        ${hidden("redirect_uri", params.redirectUri)}

@@ -43,7 +43,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const redirectUris = body.redirect_uris;
-  const clientId = mintClientId(redirectUris);
+  const clientId = mintClientId(redirectUris, body.client_name);
   if (!clientId) {
     return json(
       {
