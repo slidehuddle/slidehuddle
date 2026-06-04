@@ -383,6 +383,160 @@ async function setDeckForConversation(conversationId, entry) {
   await storageSet({ [MAP_KEY]: map });
 }
 
+// ---- Auto-fill feedback from the SlideHuddle web app -----------------------
+//
+// The web app's "Send to Claude" button opens claude.ai with the curated
+// feedback tucked into the URL fragment (#slidehuddle-feedback=<encoded>). The
+// fragment never leaves the browser. Here, on claude.ai, we read it and type it
+// into the message composer — but ONLY if the box is empty, and we NEVER send
+// (the user presses send themselves). The web app also copies the feedback to
+// the clipboard, so if this auto-fill can't find the composer the user can
+// still paste manually.
+//
+// Key must match FEEDBACK_HASH_KEY in
+// web/src/app/viewer/SendToClaudeButton.tsx.
+const FEEDBACK_HASH_KEY = "slidehuddle-feedback";
+
+function readFeedbackFromHash() {
+  const prefix = "#" + FEEDBACK_HASH_KEY + "=";
+  const hash = location.hash || "";
+  if (!hash.startsWith(prefix)) return null;
+  try {
+    const text = decodeURIComponent(hash.slice(prefix.length));
+    return text.trim() ? text : null;
+  } catch (err) {
+    console.warn("[SlideHuddle] couldn't decode feedback from URL:", err);
+    return null;
+  }
+}
+
+// Remove our fragment from the address bar so it doesn't linger or re-fill on a
+// refresh / SPA navigation. replaceState doesn't fire hashchange, so this can't
+// loop back into the autofill listener.
+function stripFeedbackHash() {
+  try {
+    history.replaceState(null, "", location.pathname + location.search);
+  } catch (_) {
+    // Non-fatal: worst case the fragment stays in the URL.
+  }
+}
+
+function isVisibleEl(el) {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+// Claude's composer is a ProseMirror contenteditable. Selectors are ordered
+// most- to least-specific; we never guessed these blindly (see the project's
+// DOM-selectors notes), so the broad fallbacks exist only to survive a future
+// markup change rather than as the primary match. We also accept a <textarea>
+// in case an older/alternate composer is in use.
+function findComposer() {
+  const selectors = [
+    'div.ProseMirror[contenteditable="true"]',
+    'div[contenteditable="true"][translate="no"]',
+    '[contenteditable="true"][role="textbox"]',
+    'div[contenteditable="true"]',
+  ];
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (isVisibleEl(el)) return el;
+    }
+  }
+  const ta = document.querySelector("textarea");
+  return ta && isVisibleEl(ta) ? ta : null;
+}
+
+function composerIsEmpty(el) {
+  if (el.tagName === "TEXTAREA") return (el.value || "").trim() === "";
+  // ProseMirror renders an empty doc as <p><br></p> — textContent is "".
+  return (el.textContent || "").trim() === "";
+}
+
+// Insert text without sending. A synthetic paste event is the most reliable way
+// to get multi-line text into ProseMirror (it splits lines into paragraphs);
+// execCommand insertText is the fallback for plain contenteditable/textarea.
+function fillComposer(el, text) {
+  el.focus();
+
+  if (el.tagName === "TEXTAREA") {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    if (setter) setter.call(el, text);
+    else el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+
+  // contenteditable / ProseMirror: try a real paste event first.
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    el.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  } catch (err) {
+    console.warn("[SlideHuddle] paste-event fill failed, trying execCommand:", err);
+  }
+
+  // If the editor didn't accept the paste (still empty), fall back to
+  // execCommand insertText.
+  if (composerIsEmpty(el)) {
+    try {
+      document.execCommand("insertText", false, text);
+    } catch (err) {
+      console.warn("[SlideHuddle] execCommand fill failed:", err);
+    }
+  }
+}
+
+// Read the feedback fragment (if any) and fill the composer once it appears.
+// claude.ai is a single-page app, so the composer may not exist at
+// document_idle — poll briefly for it.
+function autofillFeedbackFromHash() {
+  if (!isTopFrame) return;
+  const text = readFeedbackFromHash();
+  if (!text) return;
+
+  // Strip the fragment up front (we keep `text` in memory) so a refresh or
+  // in-app navigation can never silently re-fill the box.
+  stripFeedbackHash();
+
+  let attempts = 0;
+  const MAX_ATTEMPTS = 40; // ~10s at 250ms
+  const timer = setInterval(() => {
+    attempts++;
+    const composer = findComposer();
+    if (composer) {
+      clearInterval(timer);
+      if (!composerIsEmpty(composer)) {
+        console.log(
+          "[SlideHuddle] composer already has text — left it as-is " +
+            "(your feedback is on the clipboard, paste it where you like)",
+        );
+        return;
+      }
+      fillComposer(composer, text);
+      console.log("[SlideHuddle] feedback auto-filled into the composer (not sent)");
+    } else if (attempts >= MAX_ATTEMPTS) {
+      clearInterval(timer);
+      console.warn(
+        "[SlideHuddle] couldn't find Claude's message box to auto-fill — " +
+          "your feedback is on the clipboard, paste it manually",
+      );
+    }
+  }, 250);
+}
+
 // ---- Capture-time choice prompt --------------------------------------------
 //
 // Shown only when the current conversation already has a deck. Lets the user
@@ -898,6 +1052,11 @@ if (isTopFrame) {
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.body, { childList: true, subtree: true });
   scheduleScan();
+  // Fill the composer if we were opened with feedback from the web app. We
+  // normally arrive via a fresh tab (handled on load); the hashchange listener
+  // also covers the rare case the fragment arrives via in-app navigation.
+  autofillFeedbackFromHash();
+  window.addEventListener("hashchange", autofillFeedbackFromHash);
   console.log("[SlideHuddle] content script loaded on", window.location.href);
 } else {
   installIframeHandler();

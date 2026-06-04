@@ -78,6 +78,11 @@ export default async function ViewerPage({
     versions: false,
   };
 
+  // The Claude conversation this deck was captured from, if known. Powers the
+  // "Send to Claude" action (opens the bound chat). Null = unbound / orphan /
+  // pre-migration deck → the button falls back to a new chat + clipboard.
+  let conversationId: string | null = null;
+
   // Version UI state (stored decks only).
   let deckTitle: string | null = null;
   let versionNav: VersionNavItem[] = [];
@@ -106,6 +111,7 @@ export default async function ViewerPage({
     loadErrors.versions = versionsLoad.failed;
     const versions = versionsLoad.rows;
     isOwner = !!(user && deck && deck.user_id === user.id);
+    conversationId = deck?.conversation_id ?? null;
     deckTitle = deck?.title ?? null;
     currentVersion = deck?.version ?? 1;
     viewingVersion = currentVersion;
@@ -270,6 +276,7 @@ export default async function ViewerPage({
         currentUserId={currentUserId}
         currentUserEmail={currentUserEmail}
         isOwner={isOwner}
+        conversationId={conversationId}
         loadErrors={loadErrors}
         deckLoadFailed={deckLoadFailed}
         loginHref={loginHref}

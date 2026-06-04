@@ -39,6 +39,9 @@ type Props = {
   currentUserEmail: string | null;
   /** Whether the signed-in user owns this deck (may delete any stub). */
   isOwner: boolean;
+  /** Claude conversation this deck was captured from (claude.ai/chat/<id>),
+   *  or null when unbound. Powers the "Send to Claude" action. */
+  conversationId: string | null;
   /** Which collaboration datasets FAILED to load (real error, not empty). */
   loadErrors?: {
     comments: boolean;
@@ -62,6 +65,7 @@ export default function SlideViewer({
   currentUserId,
   currentUserEmail,
   isOwner,
+  conversationId,
   loadErrors,
   deckLoadFailed,
   loginHref,
@@ -743,6 +747,7 @@ export default function SlideViewer({
         loginHref={loginHref}
         onInsertStub={handleInsertStub}
         feedbackText={canCurate ? feedbackText : undefined}
+        conversationId={conversationId}
       />
 
       <div className="flex-1 flex flex-row min-h-0">

@@ -6,7 +6,7 @@ import { buildSrcdoc } from "./parse-deck";
 import { type DisplayItem, positionForGap } from "./display-items";
 import InsertStubForm from "./InsertStubForm";
 import CopyLinkButton from "./CopyLinkButton";
-import FeedbackButton from "./FeedbackButton";
+import SendToClaudeButton from "./SendToClaudeButton";
 import PortalPopover from "@/components/PortalPopover";
 
 type Props = {
@@ -28,9 +28,12 @@ type Props = {
     position: number,
     fields: { title: string; subtitle: string; body: string },
   ) => Promise<void>;
-  /** Prebuilt "Copy feedback for Claude" prompt; null = nothing to send yet.
+  /** Prebuilt "Send to Claude" prompt; null = nothing to send yet.
    *  undefined = don't show the button at all (e.g. non-stored decks). */
   feedbackText?: string | null;
+  /** Claude conversation this deck was captured from, or null when unbound.
+   *  The "Send to Claude" primary action opens this chat. */
+  conversationId?: string | null;
 };
 
 // Uniform thumbnail height keeps the strip tidy; width follows the deck's
@@ -303,6 +306,7 @@ export default function ThumbnailStrip({
   loginHref,
   onInsertStub,
   feedbackText,
+  conversationId,
 }: Props) {
   const [openGap, setOpenGap] = useState<number | null>(null);
 
@@ -522,7 +526,10 @@ export default function ThumbnailStrip({
         <div className="flex flex-row items-center justify-center gap-2.5 pl-3 shrink-0">
           <CopyLinkButton />
           {feedbackText !== undefined && (
-            <FeedbackButton feedbackText={feedbackText} />
+            <SendToClaudeButton
+              feedbackText={feedbackText}
+              conversationId={conversationId ?? null}
+            />
           )}
         </div>
       )}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SlideHuddle",
-  "version": "0.3.0",
-  "description": "Detects HTML slides in Claude conversations and opens them in SlideHuddle.",
+  "version": "0.4.0",
+  "description": "Detects HTML slides in Claude conversations and opens them in SlideHuddle, and fills the team's feedback back into Claude's message box.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

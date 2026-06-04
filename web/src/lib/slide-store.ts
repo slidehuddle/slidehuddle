@@ -327,15 +327,31 @@ export type DeckMeta = {
   slide_count: number | null;
   created_at: string | null;
   updated_at: string | null;
+  /** Claude conversation the deck was captured from (claude.ai/chat/<id>);
+   *  null when unbound or the column hasn't been migrated yet. */
+  conversation_id: string | null;
 };
 
 export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
+  // Select including the conversation binding. Pre-migration the column won't
+  // exist, so on a missing-column error we retry the same query without it
+  // rather than failing the whole meta load (which the viewer depends on).
+  const baseCols = "id, user_id, version, title, slide_count, created_at, updated_at";
+  let conversationKnown = true;
+  let { data, error } = await supabase
     .from("decks")
-    .select("id, user_id, version, title, slide_count, created_at, updated_at")
+    .select(`${baseCols}, claude_conversation_id`)
     .eq("id", id)
     .maybeSingle();
+  if (error && isMissingColumnError(error)) {
+    conversationKnown = false;
+    ({ data, error } = await supabase
+      .from("decks")
+      .select(baseCols)
+      .eq("id", id)
+      .maybeSingle());
+  }
   if (error) {
     logDbError("deck meta fetch failed", error);
     return null;
@@ -349,6 +365,7 @@ export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
     slide_count: number | null;
     created_at: string | null;
     updated_at: string | null;
+    claude_conversation_id?: string | null;
   };
   return {
     id: row.id,
@@ -358,6 +375,7 @@ export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
     slide_count: row.slide_count,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    conversation_id: conversationKnown ? row.claude_conversation_id ?? null : null,
   };
 }
 
