@@ -145,7 +145,12 @@ export default async function ViewerPage({
 
     if (user && deck) {
       if (isCaptureSource && deck.user_id === null) {
-        await claimOrphanDeck(id, user.id);
+        const claimed = await claimOrphanDeck(id, user.id);
+        // The capturer becomes the owner. isOwner was computed above BEFORE
+        // this claim (when deck.user_id was still null), so promote it now —
+        // otherwise owner-only UI (the "Send to Claude" feedback button) stays
+        // hidden on the capture view until a manual reload.
+        if (claimed) isOwner = true;
       } else if (!isOwner && deck.user_id !== null) {
         await trackSharedDeck(id, user.id);
       }
