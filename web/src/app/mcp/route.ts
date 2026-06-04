@@ -29,6 +29,7 @@ import {
   getCommentsForDeck,
   getStubsForDeck,
   getFlagsForDeck,
+  clearAddressedFeedback,
   countSlides,
   dependsOnClaudeDesignSystem,
   type DeckMeta,
@@ -279,11 +280,24 @@ const handler = createMcpHandler(
           const { version, title } = await updateDeck(deckId, html, {
             userId: auth.userId,
           });
+          // The revision was made in response to the deck's feedback, so clear
+          // the items it addressed (requested slides + flags) — otherwise the
+          // fulfilled placeholders would linger on the new version. Comments are
+          // version-scoped, so they already don't carry over. Best-effort: a
+          // clearing hiccup must not undo the saved revision.
+          const cleared = await clearAddressedFeedback(deckId);
+          const clearedCount = cleared.stubs + cleared.flags;
+          const clearedNote =
+            clearedCount > 0
+              ? `\ncleared ${clearedCount} addressed feedback item(s) ` +
+                `(requested slides/flags) so v${version} starts clean`
+              : "";
           const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
           return textResult(
             `Saved "${title ?? "Untitled"}" as version ${version}.\n` +
               `version: ${version}\n` +
-              `share_url: ${shareUrl} (unchanged)`,
+              `share_url: ${shareUrl} (unchanged)` +
+              clearedNote,
           );
         } catch (err) {
           const message =

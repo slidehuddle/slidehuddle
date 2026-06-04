@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import CommentsPanel from "./CommentsPanel";
 import ThumbnailStrip from "./ThumbnailStrip";
 import StubSlideView from "./StubSlideView";
@@ -84,6 +85,62 @@ export default function SlideViewer({
   const [flags, setFlags] = useState<FlagRow[]>(initialFlags);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+
+  const router = useRouter();
+
+  // Live version watch: notice when the deck is revised out-of-band (e.g.
+  // Claude saving a new version via the MCP server) so an open viewer updates
+  // without a manual browser refresh. Only meaningful for a stored deck being
+  // viewed at its current version — a historical (read-only) view is skipped.
+  const [liveNewVersion, setLiveNewVersion] = useState<number | null>(null);
+  // Read commentsOpen via a ref inside the poll so toggling the panel doesn't
+  // restart the polling effect.
+  const commentsOpenRef = useRef(commentsOpen);
+  useEffect(() => {
+    commentsOpenRef.current = commentsOpen;
+  }, [commentsOpen]);
+
+  useEffect(() => {
+    if (!deckId || readOnly) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/deck-version?id=${encodeURIComponent(deckId)}`,
+          { cache: "no-store" },
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { version?: number };
+          if (
+            !cancelled &&
+            typeof data.version === "number" &&
+            data.version > viewingVersion
+          ) {
+            // A newer version exists than the one we're showing. If the user
+            // isn't mid-comment, update in place — router.refresh() re-renders
+            // the server component and the parent's version `key` remounts us
+            // with the new version. Otherwise surface a banner instead, so we
+            // never discard a half-typed comment.
+            if (commentsOpenRef.current) {
+              setLiveNewVersion(data.version);
+            } else {
+              router.refresh();
+            }
+            return; // stop polling; the refresh / banner action takes over
+          }
+        }
+      } catch {
+        // Network blip — keep polling.
+      }
+      if (!cancelled) timer = setTimeout(poll, 12000);
+    };
+    timer = setTimeout(poll, 12000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [deckId, readOnly, viewingVersion, router]);
 
   // After inserting a stub we want to jump to it; we can't know its display
   // index inside the handler (the items list recomputes on the next render),
@@ -683,6 +740,28 @@ export default function SlideViewer({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
+      {liveNewVersion !== null && (
+        <div
+          role="status"
+          className="flex items-center justify-center gap-3 px-4 py-2 text-[13px] font-medium border-b"
+          style={{
+            backgroundColor: "#EEEDFE",
+            color: "#4A3FB5",
+            borderColor: "#D9D6F7",
+          }}
+        >
+          <span>
+            ✨ This deck was just revised — version {liveNewVersion} is ready.
+          </span>
+          <button
+            type="button"
+            onClick={() => router.refresh()}
+            className="font-semibold underline underline-offset-2 hover:opacity-80"
+          >
+            Show it
+          </button>
+        </div>
+      )}
       {loadErrorMessage && (
         <div
           role="alert"

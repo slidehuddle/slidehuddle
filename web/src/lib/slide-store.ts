@@ -911,6 +911,52 @@ export async function setFlagCuration(
   return { ok: true };
 }
 
+// When a new version is saved in response to feedback (the MCP update_deck
+// flow), the feedback that was acted on should stop showing as outstanding.
+// Comments are already version-scoped — they don't carry into the new version —
+// but requested slides (stubs) and removal flags are per-deck, so they'd
+// otherwise linger on every version (e.g. a fulfilled "add a title slide"
+// placeholder sitting next to the slide that now fulfils it).
+//
+// This deletes the INCLUDED (non-dismissed) stubs and flags for the deck —
+// i.e. exactly the items that were sent to the assistant as feedback. Dismissed
+// items (which the owner parked and never sent) are left untouched. Best-effort:
+// returns how many of each were cleared; failures are logged, not thrown, so a
+// clearing problem can never undo an already-saved revision. The caller is
+// responsible for having verified the user owns the deck.
+export async function clearAddressedFeedback(
+  deckId: string,
+): Promise<{ stubs: number; flags: number }> {
+  const supabase = getSupabaseAdmin();
+  const result = { stubs: 0, flags: 0 };
+
+  const { data: stubData, error: stubErr } = await supabase
+    .from("slide_stubs")
+    .delete()
+    .eq("deck_id", deckId)
+    .eq("dismissed", false)
+    .select("id");
+  if (stubErr) {
+    console.error("[slide-store] clear addressed stubs failed:", stubErr);
+  } else {
+    result.stubs = stubData?.length ?? 0;
+  }
+
+  const { data: flagData, error: flagErr } = await supabase
+    .from("slide_flags")
+    .delete()
+    .eq("deck_id", deckId)
+    .eq("dismissed", false)
+    .select("id");
+  if (flagErr) {
+    console.error("[slide-store] clear addressed flags failed:", flagErr);
+  } else {
+    result.flags = flagData?.length ?? 0;
+  }
+
+  return result;
+}
+
 type DbError = {
   code?: string;
   message?: string;
