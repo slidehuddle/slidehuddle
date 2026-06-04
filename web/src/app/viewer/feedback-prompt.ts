@@ -20,6 +20,58 @@ export type FeedbackInputs = {
   })[];
 };
 
+// Owner curation, applied identically everywhere the team's feedback is turned
+// into a prompt. Drop dismissed items; where the owner edited an item, send the
+// owner's words instead of the original author's. The original author fields
+// (`body`, `reason`) are never mutated — we only choose which text to forward.
+//
+// This was previously inlined in the viewer (SlideViewer.tsx). It's lifted here
+// so the web "Send to Claude" button and the MCP `get_feedback` tool share ONE
+// definition of "the curated set" and can never drift apart.
+export function selectCuratedFeedback(
+  comments: Pick<
+    CommentRow,
+    "slide_index" | "body" | "dismissed" | "owner_edited_body"
+  >[],
+  flags: Pick<
+    FlagRow,
+    "slide_index" | "reason" | "dismissed" | "owner_edited_reason"
+  >[],
+  stubs: Pick<
+    StubRow,
+    | "position"
+    | "title"
+    | "subtitle"
+    | "body"
+    | "dismissed"
+    | "owner_edited_body"
+  >[],
+): FeedbackInputs {
+  return {
+    comments: comments
+      .filter((c) => !c.dismissed)
+      .map((c) => ({
+        slide_index: c.slide_index,
+        body: c.owner_edited_body ?? c.body,
+      })),
+    flags: flags
+      .filter((f) => !f.dismissed)
+      .map((f) => ({
+        slide_index: f.slide_index,
+        reason: f.owner_edited_reason ?? f.reason,
+      })),
+    stubs: stubs
+      .filter((s) => !s.dismissed)
+      .map((s) => ({
+        position: s.position,
+        title: s.title,
+        subtitle: s.subtitle,
+        body: s.body,
+        owner_edited_body: s.owner_edited_body,
+      })),
+  };
+}
+
 const HEADER = "Please revise this deck based on the team's feedback:";
 
 // Returns the prompt text, or null when there's no feedback at all (so the UI

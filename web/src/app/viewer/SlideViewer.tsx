@@ -7,7 +7,7 @@ import StubSlideView from "./StubSlideView";
 import SlideFlagControl from "./SlideFlagControl";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import { buildDisplayItems } from "./display-items";
-import { buildFeedbackPrompt } from "./feedback-prompt";
+import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import {
   deleteStubAction,
   setCommentCurationAction,
@@ -379,31 +379,9 @@ export default function SlideViewer({
   const feedbackText = useMemo(
     () =>
       isStored
-        ? buildFeedbackPrompt({
-            // Only included (non-dismissed) comments are sent, using the
-            // owner's edited text where present.
-            comments: comments
-              .filter((c) => !c.dismissed)
-              .map((c) => ({
-                slide_index: c.slide_index,
-                body: c.owner_edited_body ?? c.body,
-              })),
-            flags: flags
-              .filter((f) => !f.dismissed)
-              .map((f) => ({
-                slide_index: f.slide_index,
-                reason: f.owner_edited_reason ?? f.reason,
-              })),
-            stubs: stubs
-              .filter((s) => !s.dismissed)
-              .map((s) => ({
-                position: s.position,
-                title: s.title,
-                subtitle: s.subtitle,
-                body: s.body,
-                owner_edited_body: s.owner_edited_body,
-              })),
-          })
+        ? // The curated set (dismissed dropped, owner edits applied) is selected
+          // by the shared helper so this matches MCP `get_feedback` exactly.
+          buildFeedbackPrompt(selectCuratedFeedback(comments, flags, stubs))
         : undefined,
     [isStored, comments, flags, stubs],
   );
