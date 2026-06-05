@@ -27,6 +27,7 @@ import {
   updateDeck,
   getDeckMeta,
   getDecksForOwner,
+  getStoredSlides,
   getCommentsForDeck,
   getStubsForDeck,
   getFlagsForDeck,
@@ -312,16 +313,17 @@ const handler = createMcpHandler(
           const { version, title } = await updateDeck(deckId, html, {
             userId: auth.userId,
           });
-          // The revision was made in response to the deck's feedback, so clear
-          // the items it addressed (requested slides + flags) — otherwise the
-          // fulfilled placeholders would linger on the new version. Comments are
-          // version-scoped, so they already don't carry over. Best-effort: a
-          // clearing hiccup must not undo the saved revision.
-          const cleared = await clearAddressedFeedback(deckId);
-          const clearedCount = cleared.stubs + cleared.flags;
-          const clearedNote =
-            clearedCount > 0
-              ? `\ncleared ${clearedCount} addressed feedback item(s) ` +
+          // The revision was made in response to the deck's feedback, so mark
+          // the items it addressed (requested slides + flags) as RESOLVED — the
+          // record is kept (auditable) but they stop showing as open, so they're
+          // not re-worked next round. Comments are version-scoped, so they
+          // already fall out of the new version automatically. Best-effort: a
+          // resolution hiccup must not undo the saved revision.
+          const resolved = await clearAddressedFeedback(deckId);
+          const resolvedCount = resolved.stubs + resolved.flags;
+          const resolvedNote =
+            resolvedCount > 0
+              ? `\nresolved ${resolvedCount} addressed feedback item(s) ` +
                 `(requested slides/flags) so v${version} starts clean`
               : "";
           const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
@@ -329,7 +331,7 @@ const handler = createMcpHandler(
             `Saved "${title ?? "Untitled"}" as version ${version}.\n` +
               `version: ${version}\n` +
               `share_url: ${shareUrl} (unchanged)` +
-              clearedNote,
+              resolvedNote,
           );
         } catch (err) {
           const message =
@@ -459,6 +461,59 @@ const handler = createMcpHandler(
             `  comments: ${curated.comments.length}\n` +
             `  requested_slides: ${curated.stubs.length}\n` +
             `  flags: ${curated.flags.length}`,
+        );
+      },
+    );
+
+    // --- get_deck_slides (read-only) -------------------------------------
+    server.registerTool(
+      "get_deck_slides",
+      {
+        title: "Read a deck's current slides",
+        description:
+          "Return the CURRENT version's slide HTML for one of your decks, plus " +
+          "its version and title — so you can revise the actual deck instead of " +
+          "regenerating it blind. Read-only — never creates, changes, or deletes " +
+          "anything. Owner only; if the deck doesn't exist or isn't yours, " +
+          "returns a neutral 'not found' (it won't reveal whether the id exists).",
+        inputSchema: {
+          deck_id: z
+            .string()
+            .uuid()
+            .describe("The deck's id (a UUID from list_decks or the share URL)."),
+        },
+      },
+      async (args, extra) => {
+        const auth = getAuthExtra(extra.authInfo);
+        if (!auth) return textResult("Not authenticated.", true);
+
+        const deckId = String(args.deck_id ?? "");
+        // Same owner-only gate + identical not-found as the other read tools.
+        const meta = await loadOwnedDeck(deckId, auth.userId);
+        if (!meta) {
+          return textResult("Deck not found, or you are not its owner.", true);
+        }
+
+        const { html, failed } = await getStoredSlides(deckId);
+        // A real load error must NOT look like "no slides".
+        if (failed) {
+          return textResult(
+            "Couldn't load this deck's slides right now — please try again.",
+            true,
+          );
+        }
+        if (html == null) {
+          // Owned deck with no stored HTML is a data anomaly, not "empty input".
+          return textResult(
+            "This deck has no stored slide content to read.",
+            true,
+          );
+        }
+
+        return textResult(
+          `Deck "${meta.title ?? "Untitled"}" — current slides (version ` +
+            `${meta.version}). Revise these and save with update_deck.\n\n` +
+            html,
         );
       },
     );

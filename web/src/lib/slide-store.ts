@@ -991,40 +991,59 @@ export async function setFlagCuration(
 // otherwise linger on every version (e.g. a fulfilled "add a title slide"
 // placeholder sitting next to the slide that now fulfils it).
 //
-// This deletes the INCLUDED (non-dismissed) stubs and flags for the deck —
-// i.e. exactly the items that were sent to the assistant as feedback. Dismissed
-// items (which the owner parked and never sent) are left untouched. Best-effort:
-// returns how many of each were cleared; failures are logged, not thrown, so a
-// clearing problem can never undo an already-saved revision. The caller is
-// responsible for having verified the user owns the deck.
+// This marks the INCLUDED (non-dismissed) stubs and flags for the deck as
+// RESOLVED — i.e. exactly the items that were sent to the assistant as feedback.
+// Resolving sets `resolved_at` (non-destructive: the record is kept for audit
+// and could be re-opened by clearing the field); they stop showing as open via
+// the resolved_at filter in getStubsForDeck/getFlagsForDeck. Dismissed items
+// (parked, never sent) and already-resolved items are left untouched, so this is
+// idempotent. Comments need no handling here — they're version-scoped and fall
+// out of the next version automatically.
+//
+// Graceful fallback: before the resolved_at migration is applied, the update
+// errors with a missing-column code; we then fall back to the previous
+// destructive DELETE so behaviour is identical to before the migration.
+//
+// Best-effort: returns how many of each were resolved; failures are logged, not
+// thrown, so a resolution hiccup can never undo an already-saved revision. The
+// caller is responsible for having verified the user owns the deck.
 export async function clearAddressedFeedback(
   deckId: string,
 ): Promise<{ stubs: number; flags: number }> {
   const supabase = getSupabaseAdmin();
   const result = { stubs: 0, flags: 0 };
+  const now = new Date().toISOString();
 
-  const { data: stubData, error: stubErr } = await supabase
-    .from("slide_stubs")
-    .delete()
-    .eq("deck_id", deckId)
-    .eq("dismissed", false)
-    .select("id");
-  if (stubErr) {
-    console.error("[slide-store] clear addressed stubs failed:", stubErr);
-  } else {
-    result.stubs = stubData?.length ?? 0;
-  }
-
-  const { data: flagData, error: flagErr } = await supabase
-    .from("slide_flags")
-    .delete()
-    .eq("deck_id", deckId)
-    .eq("dismissed", false)
-    .select("id");
-  if (flagErr) {
-    console.error("[slide-store] clear addressed flags failed:", flagErr);
-  } else {
-    result.flags = flagData?.length ?? 0;
+  for (const table of ["slide_stubs", "slide_flags"] as const) {
+    const key = table === "slide_stubs" ? "stubs" : "flags";
+    const { data, error } = await supabase
+      .from(table)
+      .update({ resolved_at: now })
+      .eq("deck_id", deckId)
+      .eq("dismissed", false)
+      .is("resolved_at", null)
+      .select("id");
+    if (error && isMissingColumnError(error)) {
+      // Pre-migration fallback: the old destructive behaviour.
+      const del = await supabase
+        .from(table)
+        .delete()
+        .eq("deck_id", deckId)
+        .eq("dismissed", false)
+        .select("id");
+      if (del.error) {
+        console.error(
+          `[slide-store] clear addressed ${key} (delete fallback) failed:`,
+          del.error,
+        );
+      } else {
+        result[key] = del.data?.length ?? 0;
+      }
+    } else if (error) {
+      console.error(`[slide-store] resolve addressed ${key} failed:`, error);
+    } else {
+      result[key] = data?.length ?? 0;
+    }
   }
 
   return result;
@@ -1119,14 +1138,23 @@ export async function getStubsForDeck(
   deckId: string,
 ): Promise<ListLoad<StubRow>> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("slide_stubs")
-    .select(
-      "id, deck_id, position, title, subtitle, body, requested_by, created_at, dismissed, owner_edited_body",
-    )
-    .eq("deck_id", deckId)
-    .order("position", { ascending: true })
-    .order("created_at", { ascending: true });
+  const cols =
+    "id, deck_id, position, title, subtitle, body, requested_by, created_at, dismissed, owner_edited_body";
+  // Only OPEN requested slides (resolved_at IS NULL) — resolved ones are kept
+  // for audit but no longer shown as outstanding. `filterOpen` lets us drop the
+  // filter if the resolved_at column hasn't been migrated yet (graceful
+  // fallback: pre-migration this behaves exactly as before).
+  const run = (filterOpen: boolean) => {
+    let q = supabase.from("slide_stubs").select(cols).eq("deck_id", deckId);
+    if (filterOpen) q = q.is("resolved_at", null);
+    return q
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true });
+  };
+  let { data, error } = await run(true);
+  if (error && isMissingColumnError(error)) {
+    ({ data, error } = await run(false));
+  }
   if (error) {
     // Any error here — including a missing slide_stubs table (migration not
     // run) — is a real failure. Surface it instead of returning a fake empty.
@@ -1296,13 +1324,19 @@ export async function getFlagsForDeck(
   deckId: string,
 ): Promise<ListLoad<FlagRow>> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("slide_flags")
-    .select(
-      "id, deck_id, slide_index, reason, flagged_by, created_at, dismissed, owner_edited_reason",
-    )
-    .eq("deck_id", deckId)
-    .order("created_at", { ascending: true });
+  const cols =
+    "id, deck_id, slide_index, reason, flagged_by, created_at, dismissed, owner_edited_reason";
+  // Only OPEN flags (resolved_at IS NULL); resolved ones are kept for audit.
+  // Drop the filter if the column isn't migrated yet (graceful fallback).
+  const run = (filterOpen: boolean) => {
+    let q = supabase.from("slide_flags").select(cols).eq("deck_id", deckId);
+    if (filterOpen) q = q.is("resolved_at", null);
+    return q.order("created_at", { ascending: true });
+  };
+  let { data, error } = await run(true);
+  if (error && isMissingColumnError(error)) {
+    ({ data, error } = await run(false));
+  }
   if (error) {
     // Any error here — including a missing slide_flags table (migration not
     // run) — is a real failure, not "no flags".
