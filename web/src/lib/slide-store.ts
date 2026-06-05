@@ -710,7 +710,11 @@ export async function getDeckCommentCountsForUser(
 ): Promise<DeckCommentCounts> {
   if (deckIds.length === 0) return { counts: {}, failed: false };
   const supabase = getSupabaseAdmin();
-  const [viewsRes, commentsRes] = await Promise.all([
+  // Also fetch each deck's CURRENT version: comments are version-scoped (a
+  // comment belongs to the version it was written on, and the viewer only shows
+  // the current version's comments), so the dashboard count must likewise count
+  // only current-version comments — not the total across every past version.
+  const [viewsRes, commentsRes, decksRes] = await Promise.all([
     supabase
       .from("deck_views")
       .select("deck_id, last_viewed_at")
@@ -718,17 +722,19 @@ export async function getDeckCommentCountsForUser(
       .in("deck_id", deckIds),
     supabase
       .from("comments")
-      .select("deck_id, created_at")
+      .select("deck_id, created_at, version")
       .in("deck_id", deckIds),
+    supabase.from("decks").select("id, version").in("id", deckIds),
   ]);
-  // The comments query is what drives the counts; a deck_views failure only
-  // affects read/unread accuracy. Treat either as a real load failure so the
-  // dashboard can warn rather than silently show "no comments".
+  // The comments + decks queries drive the counts; a deck_views failure only
+  // affects read/unread accuracy. Treat any as a real load failure so the
+  // dashboard can warn rather than silently show a wrong/empty count.
   if (viewsRes.error) logDbError("deck_views fetch failed", viewsRes.error);
   if (commentsRes.error) {
     logDbError("comment counts fetch failed", commentsRes.error);
   }
-  const failed = !!viewsRes.error || !!commentsRes.error;
+  if (decksRes.error) logDbError("deck versions fetch failed", decksRes.error);
+  const failed = !!viewsRes.error || !!commentsRes.error || !!decksRes.error;
   const lastViewed: Record<string, string> = {};
   for (const v of (viewsRes.data ?? []) as {
     deck_id: string;
@@ -736,11 +742,23 @@ export async function getDeckCommentCountsForUser(
   }[]) {
     lastViewed[v.deck_id] = v.last_viewed_at;
   }
+  const currentVersion: Record<string, number> = {};
+  for (const d of (decksRes.data ?? []) as {
+    id: string;
+    version: number | null;
+  }[]) {
+    currentVersion[d.id] =
+      typeof d.version === "number" && d.version > 0 ? d.version : 1;
+  }
   const counts: Record<string, { total: number; unread: number }> = {};
   for (const c of (commentsRes.data ?? []) as {
     deck_id: string;
     created_at: string;
+    version: number | null;
   }[]) {
+    // Only count comments on the deck's current version (matches the viewer).
+    const cur = currentVersion[c.deck_id];
+    if (cur == null || c.version !== cur) continue;
     const entry =
       counts[c.deck_id] ?? (counts[c.deck_id] = { total: 0, unread: 0 });
     entry.total++;
