@@ -28,6 +28,12 @@ const PURPLE = "#4A3FB5";
 const PURPLE_TINT = "#EEEDFE";
 const DIVIDER = "rgba(74,63,181,0.30)";
 
+// Both resting states — the muted "No comments…" chip and the active split
+// button — share this min width so the action keeps the same footprint whether
+// or not there's feedback. ~the natural width of the (wider) muted chip, so the
+// narrower split button is the one that gets extended to match.
+const ACTION_MIN_W = "min-w-[242px]";
+
 // The fragment key the extension looks for on claude.ai. The web app tucks the
 // feedback into `#<KEY>=<encodeURIComponent(text)>`; content.js must read the
 // SAME key. The fragment stays local to the browser (never sent to a server).
@@ -88,7 +94,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
       <span
         aria-disabled="true"
         title="No comments, requested slides, or flags to send yet"
-        className="inline-flex items-center gap-2 rounded-lg bg-[#f0f0f3] text-muted text-sm font-semibold px-3.5 py-2 cursor-not-allowed select-none"
+        className={`inline-flex items-center justify-center gap-2 rounded-lg bg-[#f0f0f3] text-muted text-sm font-semibold px-3.5 py-2 cursor-not-allowed select-none ${ACTION_MIN_W}`}
       >
         <Sparkle />
         No comments for Claude yet
@@ -138,7 +144,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
           single button with a dropdown affordance — not two buttons. */}
       <div
         ref={containerRef}
-        className="inline-flex items-stretch rounded-lg overflow-hidden border"
+        className={`inline-flex items-stretch rounded-lg overflow-hidden border ${ACTION_MIN_W}`}
         style={{ borderColor: PURPLE, backgroundColor: "#ffffff" }}
       >
         {/* Primary action — opens the bound Claude conversation. */}
@@ -147,7 +153,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
           onClick={handleSend}
           aria-live="polite"
           title="Open your Claude conversation and fill in the team's feedback"
-          className="inline-flex items-center gap-2 text-sm font-semibold pl-3.5 pr-3 py-2 transition-colors"
+          className="inline-flex flex-1 items-center justify-center gap-2 text-sm font-semibold pl-3.5 pr-3 py-2 transition-colors"
           style={{ color: PURPLE, backgroundColor: "#ffffff" }}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = PURPLE_TINT)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#ffffff")}
