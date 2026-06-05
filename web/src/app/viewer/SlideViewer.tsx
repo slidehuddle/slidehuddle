@@ -11,6 +11,7 @@ import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import {
   deleteStubAction,
+  editStubFieldsAction,
   setCommentCurationAction,
   setStubCurationAction,
   setFlagCurationAction,
@@ -604,18 +605,29 @@ export default function SlideViewer({
     }
   }
 
-  // Owner-only: set/clear the owner's edited description for a requested slide.
-  async function handleEditStub(stubId: string, ownerEditedBody: string | null) {
+  // Requester or owner: edit a requested slide's title/subtitle/body. Optimistic;
+  // also clears any legacy owner_edited_body so the structured fields are what's
+  // shown and sent. Permission is enforced server-side in editStubFields.
+  async function handleEditStub(
+    stubId: string,
+    fields: { title: string; subtitle: string; body: string },
+  ) {
     if (!deckId) return;
     const snapshot = stubs;
     setStubs((prev) =>
       prev.map((s) =>
-        s.id === stubId ? { ...s, owner_edited_body: ownerEditedBody } : s,
+        s.id === stubId
+          ? {
+              ...s,
+              title: fields.title || null,
+              subtitle: fields.subtitle || null,
+              body: fields.body || null,
+              owner_edited_body: null,
+            }
+          : s,
       ),
     );
-    const res = await setStubCurationAction(deckId, stubId, {
-      owner_edited_body: ownerEditedBody,
-    });
+    const res = await editStubFieldsAction(deckId, stubId, fields);
     if (!res.ok) {
       console.error("[SlideViewer] stub edit failed:", res.error);
       setStubs(snapshot);
@@ -866,8 +878,10 @@ export default function SlideViewer({
 
           {/* Comments pill — top-right of the slide. Because the panel is a
               flex sibling, opening it shrinks the stage and this pill slides
-              left with it, so it's never covered by the panel. */}
-          {isStored && (
+              left with it, so it's never covered by the panel. Hidden on
+              requested (stub) slides — comments don't apply there yet, so the
+              pill would just be clutter. */}
+          {isStored && activeStub === null && (
             <button
               type="button"
               onClick={() => setCommentsOpen((v) => !v)}
@@ -951,7 +965,7 @@ export default function SlideViewer({
           </span>
         </div>
 
-        {commentsOpen && isStored && (
+        {commentsOpen && isStored && activeStub === null && (
           <CommentsPanel
             slideLabel={safeIndex + 1}
             isStub={activeStub !== null}

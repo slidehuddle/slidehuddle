@@ -1,12 +1,19 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { StubRow } from "@/lib/slide-store";
 import PortalPopover from "@/components/PortalPopover";
+import StubFieldsForm from "./StubFieldsForm";
 
 // Display for a requested ("stub") slide — a white card with a dashed border
 // and the request details, shown in place of the sandboxed iframe when the
 // active item is a stub. Left-justified, vertically centred, capped width.
+//
+// A requested slide is a shared, directly-editable draft: both the requester
+// and the deck owner can edit its three fields (title / subtitle / content) via
+// the same form used to create one. All three fields are always shown — empty
+// ones read "Not set yet" — so it's clear there are three things to fill.
 
 const DELETE_RED = "#791F1F"; // menu action text
 const CONFIRM_RED = "#B42318"; // confirm button
@@ -25,13 +32,15 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-// The "…" menu next to the "Requested by" badge. Shown only to the requester or
-// the deck owner. Opens a one-item menu ("Delete this request") that swaps to a
-// confirmation card. Both states render inside a portal so they sit above the
-// slide stage (same pattern as the flag menu).
-function StubDeleteMenu({
+// The "…" menu next to the "Requested by" badge. Shown to the requester or the
+// deck owner. Offers "Edit this request" and "Delete this request"; delete swaps
+// to a confirmation card. Both states render inside a portal so they sit above
+// the slide stage (same pattern as the flag menu).
+function StubActionsMenu({
+  onEdit,
   onDelete,
 }: {
+  onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -123,6 +132,31 @@ function StubDeleteMenu({
             <button
               type="button"
               role="menuitem"
+              onClick={() => {
+                close();
+                onEdit();
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold text-foreground hover:bg-black/[0.04] transition-colors"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+              </svg>
+              Edit this request
+            </button>
+            <button
+              type="button"
+              role="menuitem"
               onClick={() => setConfirming(true)}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold hover:bg-black/[0.04] transition-colors"
               style={{ color: DELETE_RED }}
@@ -153,16 +187,51 @@ function StubDeleteMenu({
   );
 }
 
-// Compose the stub's request fields into the readable description that seeds
-// the owner editor / is sent to Claude when unedited.
-function composeStubText(stub: StubRow): string {
-  return [
-    stub.title && `Title: ${stub.title}`,
-    stub.subtitle && `Subtitle: ${stub.subtitle}`,
-    stub.body && `Should cover: ${stub.body}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+// Centred modal carrying the shared 3-field form. Rendered into a portal so it
+// floats above the slide stage (which clips its overflow). Backdrop click and
+// Escape both cancel.
+function StubEditModal({
+  stub,
+  onSave,
+  onClose,
+}: {
+  stub: StubRow;
+  onSave: (fields: { title: string; subtitle: string; body: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl border border-border bg-white shadow-[0_20px_60px_rgba(0,0,0,0.25)] p-4"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <StubFieldsForm
+          heading="Edit requested slide"
+          submitLabel="Save changes"
+          submittingLabel="Saving…"
+          initialTitle={stub.title ?? ""}
+          initialSubtitle={stub.subtitle ?? ""}
+          initialBody={stub.body ?? ""}
+          onSubmit={onSave}
+          onClose={onClose}
+        />
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 export default function StubSlideView({
@@ -181,16 +250,28 @@ export default function StubSlideView({
   canCurate?: boolean;
   onDelete: (stubId: string) => Promise<void>;
   onDismiss?: (stubId: string, dismissed: boolean) => Promise<void>;
-  onEdit?: (stubId: string, ownerEditedBody: string | null) => Promise<void>;
+  onEdit?: (
+    stubId: string,
+    fields: { title: string; subtitle: string; body: string },
+  ) => Promise<void>;
 }) {
-  // Only the person who requested the stub or the deck owner may delete it.
-  const canDelete =
+  // The person who requested the stub or the deck owner may edit or delete it.
+  const canEdit =
     isOwner || (!!currentUserId && stub.requested_by === currentUserId);
+  const canDelete = canEdit;
 
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const editBtnRef = useRef<HTMLButtonElement>(null);
-  const edited = stub.owner_edited_body != null;
+
+  async function handleSave(fields: {
+    title: string;
+    subtitle: string;
+    body: string;
+  }) {
+    await onEdit?.(stub.id, fields);
+    setEditing(false);
+  }
+
+  const dim = stub.dismissed ? "line-through text-muted" : "text-foreground";
 
   // Fills the card it's placed in — the parent sizes that card to match the
   // imported slides (and resizes it when the comments panel opens), so a
@@ -226,11 +307,11 @@ export default function StubSlideView({
               </svg>
               Requested by {displayName(stub.requested_by_email)}
             </span>
-            {edited && (
-              <span className="text-[11px] text-muted">· edited</span>
-            )}
             {canDelete && (
-              <StubDeleteMenu onDelete={() => onDelete(stub.id)} />
+              <StubActionsMenu
+                onEdit={() => setEditing(true)}
+                onDelete={() => onDelete(stub.id)}
+              />
             )}
           </div>
 
@@ -252,49 +333,48 @@ export default function StubSlideView({
             </p>
           )}
 
-          {edited ? (
-            // Owner replaced the request with their own description; show that
-            // (it's what Claude receives). The original fields stay in the DB.
-            <div className="flex flex-col gap-1.5">
-              <FieldLabel>Sent to Claude</FieldLabel>
+          {/* All three fields are always shown; empty ones read "Not set yet"
+              so it's clear what can still be filled in. */}
+          <div className="flex flex-col gap-1">
+            <FieldLabel>Title</FieldLabel>
+            {stub.title ? (
+              <span className={`text-[22px] font-medium leading-snug ${dim}`}>
+                {stub.title}
+              </span>
+            ) : (
+              <span className="text-[13px] leading-snug text-muted/40 italic">
+                Not set yet
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <FieldLabel>Subtitle</FieldLabel>
+            {stub.subtitle ? (
+              <span className="text-[16px] text-muted leading-snug">
+                {stub.subtitle}
+              </span>
+            ) : (
+              <span className="text-[13px] leading-snug text-muted/40 italic">
+                Not set yet
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <FieldLabel>What should this slide cover</FieldLabel>
+            {stub.body ? (
               <p
-                className={`w-full text-[14px] leading-relaxed rounded-lg bg-black/[0.04] px-4 py-3.5 whitespace-pre-wrap ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
+                className={`w-full text-[14px] leading-relaxed whitespace-pre-wrap ${dim}`}
               >
-                {stub.owner_edited_body}
+                {stub.body}
               </p>
-            </div>
-          ) : (
-            <>
-              <div className="flex flex-col gap-1">
-                <FieldLabel>Title</FieldLabel>
-                <span
-                  className={`text-[22px] font-medium leading-snug ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
-                >
-                  {stub.title || "Untitled slide"}
-                </span>
-              </div>
-
-              {stub.subtitle && (
-                <div className="flex flex-col gap-1">
-                  <FieldLabel>Subtitle</FieldLabel>
-                  <span className="text-[16px] text-muted leading-snug">
-                    {stub.subtitle}
-                  </span>
-                </div>
-              )}
-
-              {stub.body && (
-                <div className="flex flex-col gap-1.5">
-                  <FieldLabel>What should this slide cover</FieldLabel>
-                  <p
-                    className={`w-full text-[14px] leading-relaxed rounded-lg bg-black/[0.04] px-4 py-3.5 whitespace-pre-wrap ${stub.dismissed ? "line-through text-muted" : "text-foreground"}`}
-                  >
-                    {stub.body}
-                  </p>
-                </div>
-              )}
-            </>
-          )}
+            ) : (
+              <p className="text-[13px] leading-snug text-muted/40 italic">
+                Not set yet
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -303,14 +383,10 @@ export default function StubSlideView({
       {canCurate && !stub.dismissed && (
         <div className="pointer-events-none absolute top-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
           <button
-            ref={editBtnRef}
             type="button"
-            onClick={() => {
-              setDraft(stub.owner_edited_body ?? composeStubText(stub));
-              setEditing(true);
-            }}
-            aria-label="Edit what's sent to Claude"
-            title="Edit what's sent to Claude"
+            onClick={() => setEditing(true)}
+            aria-label="Edit this requested slide"
+            title="Edit this requested slide"
             className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
             style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
           >
@@ -359,52 +435,13 @@ export default function StubSlideView({
         </div>
       )}
 
-      {/* Edit popup — rendered in a portal so it floats above the slide stage. */}
-      <PortalPopover
-        anchorRef={editBtnRef}
-        open={editing}
-        onClose={() => setEditing(false)}
-        width={320}
-        placement="bottom-center"
-      >
-        <div className="rounded-xl border border-border bg-white shadow-[0_12px_40px_rgba(0,0,0,0.15)] p-3 flex flex-col gap-2">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={5}
-            maxLength={4000}
-            autoFocus
-            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
-          />
-          <p className="text-[11px] text-muted leading-snug">
-            Only changes what&apos;s sent to Claude —{" "}
-            {displayName(stub.requested_by_email)}&apos;s request stays as
-            written.
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={!draft.trim()}
-              onClick={async () => {
-                const text = draft.trim();
-                if (!text) return;
-                await onEdit?.(stub.id, text);
-                setEditing(false);
-              }}
-              className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="text-xs text-muted hover:text-foreground transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </PortalPopover>
+      {editing && (
+        <StubEditModal
+          stub={stub}
+          onSave={handleSave}
+          onClose={() => setEditing(false)}
+        />
+      )}
     </div>
   );
 }

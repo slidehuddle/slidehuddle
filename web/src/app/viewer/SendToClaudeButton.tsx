@@ -91,7 +91,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
         className="inline-flex items-center gap-2 rounded-lg bg-[#f0f0f3] text-muted text-sm font-semibold px-3.5 py-2 cursor-not-allowed select-none"
       >
         <Sparkle />
-        Nothing to share with Claude yet
+        No comments for Claude yet
       </span>
     );
   }

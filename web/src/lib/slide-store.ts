@@ -1131,6 +1131,74 @@ export async function deleteStub(
   return { ok: true };
 }
 
+// Edit a requested slide's structured fields (title / subtitle / body). Unlike
+// the owner-only dismiss/curation path (setStubCuration), editing is allowed for
+// the REQUESTER or the deck OWNER — same access rule as deleteStub — because the
+// request is now a shared, directly-editable draft (no separate owner override).
+// Writing fields also clears any legacy owner_edited_body so the structured
+// fields are the single source of truth for what's shown and sent to Claude.
+export async function editStubFields(
+  deckId: string,
+  stubId: string,
+  userId: string,
+  fields: { title: string; subtitle: string; body: string },
+): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: stub, error: readErr } = await supabase
+    .from("slide_stubs")
+    .select("id, deck_id, requested_by")
+    .eq("id", stubId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[slide-store] stub read failed:", readErr);
+    return { ok: false, reason: "error" };
+  }
+  // Guard against a stub id from a different deck (deckId comes from the client).
+  if (!stub || stub.deck_id !== deckId) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const { data: deck, error: deckErr } = await supabase
+    .from("decks")
+    .select("user_id")
+    .eq("id", deckId)
+    .maybeSingle();
+  if (deckErr) {
+    console.error("[slide-store] deck read failed:", deckErr);
+    return { ok: false, reason: "error" };
+  }
+
+  const isRequester = !!stub.requested_by && stub.requested_by === userId;
+  const isOwner = !!deck && deck.user_id === userId;
+  if (!isRequester && !isOwner) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  // Need at least a title or some content — mirror the create-form validation.
+  const title = fields.title.trim();
+  const subtitle = fields.subtitle.trim();
+  const body = fields.body.trim();
+  if (!title && !body) {
+    return { ok: false, reason: "empty" };
+  }
+
+  const { error: updErr } = await supabase
+    .from("slide_stubs")
+    .update({
+      title: title || null,
+      subtitle: subtitle || null,
+      body: body || null,
+      owner_edited_body: null,
+    })
+    .eq("id", stubId);
+  if (updErr) {
+    console.error("[slide-store] stub edit failed:", updErr);
+    return { ok: false, reason: "error" };
+  }
+  return { ok: true };
+}
+
 // --- Slide flags ("flag for removal") ---------------------------------
 //
 // A flag marks a real slide (by stable 0-based index) for removal, with a

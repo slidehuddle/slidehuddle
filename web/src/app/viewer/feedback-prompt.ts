@@ -13,11 +13,7 @@ import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 export type FeedbackInputs = {
   comments: Pick<CommentRow, "slide_index" | "body">[];
   flags: Pick<FlagRow, "slide_index" | "reason">[];
-  stubs: (Pick<StubRow, "position" | "title" | "subtitle" | "body"> & {
-    /** Owner's edited description; when set, used verbatim instead of the
-     *  composed title/subtitle/body line. */
-    owner_edited_body?: string | null;
-  })[];
+  stubs: Pick<StubRow, "position" | "title" | "subtitle" | "body">[];
 };
 
 // Owner curation, applied identically everywhere the team's feedback is turned
@@ -39,12 +35,7 @@ export function selectCuratedFeedback(
   >[],
   stubs: Pick<
     StubRow,
-    | "position"
-    | "title"
-    | "subtitle"
-    | "body"
-    | "dismissed"
-    | "owner_edited_body"
+    "position" | "title" | "subtitle" | "body" | "dismissed"
   >[],
 ): FeedbackInputs {
   return {
@@ -67,7 +58,6 @@ export function selectCuratedFeedback(
         title: s.title,
         subtitle: s.subtitle,
         body: s.body,
-        owner_edited_body: s.owner_edited_body,
       })),
   };
 }
@@ -102,23 +92,18 @@ export function buildFeedbackPrompt(input: FeedbackInputs): string | null {
   }
 
   for (const s of input.stubs) {
-    // The owner's edited description, when present, replaces the composed
-    // title/subtitle/body line verbatim.
-    const edited = (s.owner_edited_body ?? "").trim();
-    let description: string;
-    if (edited) {
-      description = edited;
-    } else {
-      const parts: string[] = [];
-      const title = (s.title ?? "").trim();
-      const subtitle = (s.subtitle ?? "").trim();
-      const body = (s.body ?? "").trim();
-      if (title) parts.push(`Title: ${title}`);
-      if (subtitle) parts.push(`Subtitle: ${subtitle}`);
-      if (body) parts.push(`Should cover: ${body}`);
-      if (parts.length === 0) continue;
-      description = parts.join(", ");
-    }
+    // A requested slide is now a directly-editable draft: its title/subtitle/body
+    // are the single source of truth for both the card and this prompt (the old
+    // owner_edited_body override is retired for stubs).
+    const parts: string[] = [];
+    const title = (s.title ?? "").trim();
+    const subtitle = (s.subtitle ?? "").trim();
+    const body = (s.body ?? "").trim();
+    if (title) parts.push(`Title: ${title}`);
+    if (subtitle) parts.push(`Subtitle: ${subtitle}`);
+    if (body) parts.push(`Should cover: ${body}`);
+    if (parts.length === 0) continue;
+    const description = parts.join(", ");
     // position = number of real slides before the stub. 0 → before slide 1.
     const where =
       s.position <= 0 ? "before slide 1" : `after slide ${s.position}`;
