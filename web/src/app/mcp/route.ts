@@ -26,6 +26,7 @@ import {
   storeSlides,
   updateDeck,
   getDeckMeta,
+  getDecksForOwner,
   getCommentsForDeck,
   getStubsForDeck,
   getFlagsForDeck,
@@ -125,6 +126,41 @@ function countFeedbackItems(prompt: string | null): number {
   return prompt.split("\n").length - 1;
 }
 
+// Load + curate a deck's feedback the SINGLE canonical way (same as the web
+// "Send to Claude" button): comments for the given version, plus per-deck stubs
+// and flags, run through selectCuratedFeedback (drops dismissed, applies owner
+// edits). Returns the curated set, or { failed: true } on a real load error so
+// callers never mistake a failure for "no feedback". Shared by get_feedback,
+// list_decks, and get_deck so the three can't drift.
+type CuratedFeedback = ReturnType<typeof selectCuratedFeedback>;
+async function loadCuratedFeedback(
+  deckId: string,
+  userId: string,
+  version: number,
+): Promise<{ curated: CuratedFeedback | null; failed: boolean }> {
+  const [comments, stubs, flags] = await Promise.all([
+    getCommentsForDeck(deckId, userId, version),
+    getStubsForDeck(deckId),
+    getFlagsForDeck(deckId),
+  ]);
+  if (comments.failed || stubs.failed || flags.failed) {
+    return { curated: null, failed: true };
+  }
+  return {
+    curated: selectCuratedFeedback(comments.rows, flags.rows, stubs.rows),
+    failed: false,
+  };
+}
+
+// Format an ISO timestamp as a plain YYYY-MM-DD date (UTC) for tool output;
+// returns "unknown" for missing/invalid values.
+function formatDateOnly(iso: string | null): string {
+  if (!iso) return "unknown";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  return d.toISOString().slice(0, 10);
+}
+
 const handler = createMcpHandler(
   (server) => {
     // --- create_deck ------------------------------------------------------
@@ -209,13 +245,14 @@ const handler = createMcpHandler(
         }
 
         // Comments are version-scoped; feedback is for the CURRENT version.
-        // Stubs and flags are per-deck. Read via the shared store functions.
-        const [comments, stubs, flags] = await Promise.all([
-          getCommentsForDeck(deckId, auth.userId, meta.version),
-          getStubsForDeck(deckId),
-          getFlagsForDeck(deckId),
-        ]);
-        if (comments.failed || stubs.failed || flags.failed) {
+        // Stubs and flags are per-deck. Same canonical load + curation as the
+        // web "Send to Claude" button.
+        const { curated, failed } = await loadCuratedFeedback(
+          deckId,
+          auth.userId,
+          meta.version,
+        );
+        if (failed || !curated) {
           return textResult(
             "Couldn't load all of this deck's feedback right now — please try " +
               "again.",
@@ -223,12 +260,6 @@ const handler = createMcpHandler(
           );
         }
 
-        // EXACT same curation + formatting as the web "Send to Claude" button.
-        const curated = selectCuratedFeedback(
-          comments.rows,
-          flags.rows,
-          stubs.rows,
-        );
         const prompt = buildFeedbackPrompt(curated);
         const count = countFeedbackItems(prompt);
 
@@ -305,6 +336,129 @@ const handler = createMcpHandler(
           console.error("[mcp:update_deck] update failed:", err);
           return textResult(`Failed to update deck: ${message}`, true);
         }
+      },
+    );
+
+    // --- list_decks (read-only) ------------------------------------------
+    server.registerTool(
+      "list_decks",
+      {
+        title: "List your SlideHuddle decks",
+        description:
+          "List the decks owned by the authenticated user, most recently " +
+          "updated first, so you can find a deck's id no matter how it was " +
+          "created (the Chrome extension, the MCP, or another conversation). " +
+          "Read-only — never creates, changes, or deletes anything. For each " +
+          "deck it returns: deck_id, title, version, pending_feedback_count " +
+          "(included, not-yet-sent feedback items), last_updated, and the " +
+          "source Claude conversation link when one is known. Owner only.",
+        inputSchema: {},
+      },
+      async (_args, extra) => {
+        const auth = getAuthExtra(extra.authInfo);
+        if (!auth) return textResult("Not authenticated.", true);
+
+        const { rows, failed } = await getDecksForOwner(auth.userId);
+        // A load error must NOT look like "no decks" — surface it explicitly.
+        if (failed) {
+          return textResult(
+            "Couldn't load your decks right now — please try again.",
+            true,
+          );
+        }
+        if (rows.length === 0) {
+          return textResult("You don't have any decks yet.");
+        }
+
+        // pending_feedback_count per deck via the same curated path as
+        // get_feedback. null = couldn't load → shown as "unknown", never a
+        // silent 0.
+        const pendingCounts = await Promise.all(
+          rows.map(async (deck) => {
+            const { curated, failed: feedbackFailed } =
+              await loadCuratedFeedback(deck.id, auth.userId, deck.version);
+            if (feedbackFailed || !curated) return null;
+            return countFeedbackItems(buildFeedbackPrompt(curated));
+          }),
+        );
+
+        const blocks = rows.map((deck, i) => {
+          const pending = pendingCounts[i];
+          const pendingText =
+            pending === null ? "unknown (couldn't load feedback)" : `${pending}`;
+          const convo = deck.conversation_id
+            ? `\n   conversation: https://claude.ai/chat/${deck.conversation_id}`
+            : "";
+          return (
+            `${i + 1}. ${deck.title ?? "Untitled"} — v${deck.version} · ` +
+            `updated ${formatDateOnly(deck.updated_at ?? deck.created_at)} · ` +
+            `pending_feedback_count: ${pendingText}\n` +
+            `   deck_id: ${deck.id}` +
+            convo
+          );
+        });
+
+        return textResult(
+          `Your decks (${rows.length}), most recent first:\n\n` +
+            blocks.join("\n\n"),
+        );
+      },
+    );
+
+    // --- get_deck (read-only) --------------------------------------------
+    server.registerTool(
+      "get_deck",
+      {
+        title: "Get a deck summary",
+        description:
+          "Return a summary of one of your decks: title, version, slide_count, " +
+          "share_url, and a feedback summary (counts of comments, requested " +
+          "slides, and removal flags that are currently included). Read-only. " +
+          "Owner only — if the deck doesn't exist or isn't yours, returns a " +
+          "neutral 'not found' (it won't reveal whether the id exists).",
+        inputSchema: {
+          deck_id: z
+            .string()
+            .uuid()
+            .describe("The deck's id (a UUID from list_decks or the share URL)."),
+        },
+      },
+      async (args, extra) => {
+        const auth = getAuthExtra(extra.authInfo);
+        if (!auth) return textResult("Not authenticated.", true);
+
+        const deckId = String(args.deck_id ?? "");
+        // Same owner-only gate as get_feedback/update_deck. Identical response
+        // whether the deck is missing, owned by someone else, or merely shared
+        // — so this can't be used to probe which deck ids exist.
+        const meta = await loadOwnedDeck(deckId, auth.userId);
+        if (!meta) {
+          return textResult("Deck not found, or you are not its owner.", true);
+        }
+
+        const { curated, failed } = await loadCuratedFeedback(
+          deckId,
+          auth.userId,
+          meta.version,
+        );
+        if (failed || !curated) {
+          return textResult(
+            "Couldn't load this deck's feedback right now — please try again.",
+            true,
+          );
+        }
+
+        const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
+        return textResult(
+          `Deck "${meta.title ?? "Untitled"}"\n` +
+            `version: ${meta.version}\n` +
+            `slide_count: ${meta.slide_count ?? "unknown"}\n` +
+            `share_url: ${shareUrl}\n` +
+            `feedback (included items):\n` +
+            `  comments: ${curated.comments.length}\n` +
+            `  requested_slides: ${curated.stubs.length}\n` +
+            `  flags: ${curated.flags.length}`,
+        );
       },
     );
   },

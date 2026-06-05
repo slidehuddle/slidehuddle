@@ -379,6 +379,79 @@ export async function getDeckMeta(id: string): Promise<DeckMeta | null> {
   };
 }
 
+// One row of the owner's deck list (for MCP `list_decks`). A trimmed projection
+// — only the columns the discovery tool surfaces — never html_content or other
+// internal fields.
+export type OwnedDeckRow = {
+  id: string;
+  title: string | null;
+  version: number;
+  updated_at: string | null;
+  created_at: string | null;
+  conversation_id: string | null;
+};
+
+// List every deck OWNED by `userId`, most-recently-updated first. Owner-scoped
+// by `user_id` (the same rule the dashboard uses), via the admin client because
+// MCP requests have no Supabase session. Returns the ListLoad `{ rows, failed }`
+// shape so a query error is never mistaken for "no decks". Pre-migration the
+// conversation column may not exist — same graceful fallback as getDeckMeta.
+type OwnedDeckQueryRow = {
+  id: string;
+  title: string | null;
+  version: number | null;
+  updated_at: string | null;
+  created_at: string | null;
+  claude_conversation_id?: string | null;
+};
+
+export async function getDecksForOwner(
+  userId: string,
+): Promise<ListLoad<OwnedDeckRow>> {
+  const supabase = getSupabaseAdmin();
+  const baseCols = "id, title, version, updated_at, created_at";
+  const order = { ascending: false, nullsFirst: false } as const;
+  let conversationKnown = true;
+  // Two selects infer different row shapes, so capture each result separately
+  // and normalise via OwnedDeckQueryRow rather than reassigning one binding.
+  const first = await supabase
+    .from("decks")
+    .select(`${baseCols}, claude_conversation_id`)
+    .eq("user_id", userId)
+    .order("updated_at", order);
+  let data = first.data as unknown as OwnedDeckQueryRow[] | null;
+  let error = first.error;
+  if (error && isMissingColumnError(error)) {
+    conversationKnown = false;
+    const fallback = await supabase
+      .from("decks")
+      .select(baseCols)
+      .eq("user_id", userId)
+      .order("updated_at", order);
+    data = fallback.data as unknown as OwnedDeckQueryRow[] | null;
+    error = fallback.error;
+  }
+  if (error) {
+    logDbError("owned decks fetch failed", error);
+    return { rows: [], failed: true };
+  }
+  const raw = data ?? [];
+  return {
+    rows: raw.map((row) => ({
+      id: row.id,
+      title: row.title,
+      version:
+        typeof row.version === "number" && row.version > 0 ? row.version : 1,
+      updated_at: row.updated_at,
+      created_at: row.created_at,
+      conversation_id: conversationKnown
+        ? row.claude_conversation_id ?? null
+        : null,
+    })),
+    failed: false,
+  };
+}
+
 // Fetch the stored HTML for one historical version of a deck (for viewing a
 // past version in the viewer). Returns null if not found / table missing.
 export async function getDeckVersionHtml(
