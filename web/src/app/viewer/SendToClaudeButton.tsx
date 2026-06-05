@@ -33,6 +33,11 @@ const DIVIDER = "rgba(74,63,181,0.30)";
 // SAME key. The fragment stays local to the browser (never sent to a server).
 export const FEEDBACK_HASH_KEY = "slidehuddle-feedback";
 
+// SlideHuddle's hosted MCP endpoint. Pasted into Claude's "Add connector" /
+// custom-connector dialog so the assistant can talk to decks directly, rather
+// than going through the copy-paste-feedback round trip.
+const MCP_URL = "https://slidehuddleapp.vercel.app/mcp";
+
 type Props = {
   /** Prebuilt prompt text, or null when there's no feedback to send. */
   feedbackText: string | null;
@@ -68,7 +73,9 @@ function Sparkle() {
 
 export default function SendToClaudeButton({ feedbackText, conversationId }: Props) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  // Label of the most recent successful copy ("Feedback" / "MCP URL"), or null.
+  // One shared confirmation toast covers both dropdown actions.
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
   // Transient explanatory toast shown after the primary action fires.
   const [sendMsg, setSendMsg] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -93,10 +100,20 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
     if (!feedbackText) return;
     const ok = await copyText(feedbackText);
     if (ok) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedLabel("Feedback");
+      setTimeout(() => setCopiedLabel(null), 2000);
     } else {
       console.error("[SendToClaude] copy failed (modern and legacy paths)");
+    }
+  }
+
+  async function handleCopyMcpUrl() {
+    const ok = await copyText(MCP_URL);
+    if (ok) {
+      setCopiedLabel("MCP URL");
+      setTimeout(() => setCopiedLabel(null), 2000);
+    } else {
+      console.error("[SendToClaude] MCP URL copy failed (modern and legacy paths)");
     }
   }
 
@@ -214,6 +231,29 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
               <span className="block text-xs text-muted">Paste into Claude yourself.</span>
             </span>
           </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              void handleCopyMcpUrl();
+              setOpen(false);
+            }}
+            className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[#f4f3fc]"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mt-0.5 shrink-0 text-muted">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+            <span className="leading-snug">
+              <span className="block text-sm font-semibold text-[#1d1d1b]">
+                Copy MCP connector URL
+              </span>
+              <span className="block text-xs text-muted">
+                Add as a custom connector in Claude to link decks directly.
+              </span>
+            </span>
+          </button>
         </div>
       </PortalPopover>
 
@@ -221,15 +261,15 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
           copy; the other explains what the primary action just did. */}
       <div
         role="status"
-        aria-hidden={!copied}
+        aria-hidden={!copiedLabel}
         className={`pointer-events-none absolute right-0 top-full mt-1.5 z-10 inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] text-white shadow-lg transition-opacity duration-300 ${
-          copied ? "opacity-100" : "opacity-0"
+          copiedLabel ? "opacity-100" : "opacity-0"
         }`}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <polyline points="20 6 9 17 4 12" />
         </svg>
-        <span>Feedback copied</span>
+        <span>{copiedLabel} copied</span>
       </div>
 
       <div
