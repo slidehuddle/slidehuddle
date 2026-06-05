@@ -40,6 +40,7 @@ import {
   buildFeedbackPrompt,
 } from "@/app/viewer/feedback-prompt";
 import { parseAccessToken } from "@/lib/mcp-oauth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -490,4 +491,62 @@ const authHandler = withMcpAuth(
   { required: true },
 );
 
-export { authHandler as GET, authHandler as POST, authHandler as DELETE };
+// --- Per-user rate limiting -----------------------------------------------
+// A generous ceiling so a connected client can't hammer the API (e.g. scrape
+// via list_decks). Keyed by the authenticated user id from the bearer token;
+// requests without a valid token aren't counted here — they fall through to the
+// 401 path. Tunable via MCP_RATE_LIMIT_PER_MIN (default 120/min ≈ 2/sec, far
+// above normal AI use). See lib/rate-limit.ts for the serverless caveat.
+const RATE_LIMIT_PER_MIN = (() => {
+  const n = Number.parseInt(process.env.MCP_RATE_LIMIT_PER_MIN ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 120;
+})();
+const RATE_WINDOW_MS = 60_000;
+
+function rateLimited(
+  inner: (req: Request) => Promise<Response> | Response,
+): (req: Request) => Promise<Response> {
+  return async (req: Request): Promise<Response> => {
+    const authz = req.headers.get("authorization") ?? "";
+    const token = /^Bearer\s+(.+)$/i.exec(authz)?.[1];
+    const data = token ? parseAccessToken(token) : null;
+    if (data) {
+      const r = checkRateLimit(
+        `mcp:${data.userId}`,
+        RATE_LIMIT_PER_MIN,
+        RATE_WINDOW_MS,
+      );
+      if (!r.allowed) {
+        // Log the event only — no token, deck contents, or personal data.
+        console.warn(`[mcp] rate limit reached (limit ${r.limit}/min)`);
+        return new Response(
+          JSON.stringify({
+            error: "rate_limited",
+            error_description:
+              `Too many requests — limit is ${r.limit} per minute. ` +
+              `Retry in ${r.retryAfterSec}s.`,
+          }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": String(r.retryAfterSec),
+              "RateLimit-Limit": String(r.limit),
+              "RateLimit-Remaining": String(r.remaining),
+              "RateLimit-Reset": String(
+                Math.max(0, Math.ceil((r.resetAt - Date.now()) / 1000)),
+              ),
+            },
+          },
+        );
+      }
+    }
+    return inner(req);
+  };
+}
+
+const GET = rateLimited(authHandler);
+const POST = rateLimited(authHandler);
+const DELETE = rateLimited(authHandler);
+
+export { GET, POST, DELETE };
