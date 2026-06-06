@@ -51,6 +51,19 @@ export const maxDuration = 60;
 // entry points reject the same oversized payloads.
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 
+// Upper bound on the slide HTML get_deck_slides will return INLINE in a single
+// tool result. A deck can legitimately be up to MAX_HTML_BYTES (2MB), but
+// dumping that into one assistant response is risky (oversized context, client
+// limits), so above this ceiling we degrade gracefully — return the deck's
+// metadata + share link instead of the raw HTML — rather than emitting
+// something oversized. Generous so ordinary decks (well under 500KB) are always
+// returned in full; only pathologically large decks hit the fallback. Tunable
+// via MCP_MAX_SLIDES_OUTPUT_BYTES (default 1MB).
+const MAX_SLIDES_OUTPUT_BYTES = (() => {
+  const n = Number.parseInt(process.env.MCP_MAX_SLIDES_OUTPUT_BYTES ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 1024 * 1024;
+})();
+
 // What we stash in the verified token's `extra`, recovered inside each tool.
 type AuthExtra = { userId: string; email: string | null; origin: string };
 
@@ -171,10 +184,23 @@ const handler = createMcpHandler(
       {
         title: "Create a SlideHuddle deck",
         description:
-          "Create a new SlideHuddle deck from slide HTML you generated, owned " +
-          "by the authenticated user. Accepts the same HTML formats the web " +
-          "app renders (a multi-slide deck, or a self-contained single-page " +
-          "HTML artifact). Returns the deck_id and a public share_url.",
+          "Publish a slide deck to SlideHuddle and get a shareable link the " +
+          "user's team can view and comment on. Call this after you have " +
+          "generated the deck's HTML. Pass the FULL, self-contained, " +
+          "multi-slide HTML of the deck as `slides`: all CSS inline and no " +
+          "external stylesheets or fonts required to render (a standalone .html " +
+          "file you could open in any browser). SlideHuddle hosts it and " +
+          "returns a deck_id and a public share_url to give the user. Use this " +
+          "whenever the user asks to create, publish, or share a deck / slides " +
+          "/ presentation.",
+        annotations: {
+          // Creates a new resource: not read-only, but it only ever adds a new
+          // deck — it never overwrites or deletes existing data.
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
         inputSchema: {
           title: z
             .string()
@@ -183,7 +209,13 @@ const handler = createMcpHandler(
               "A title for the deck. Used to name it when the HTML has no " +
                 "<title> of its own.",
             ),
-          slides: z.string().min(1).describe("The slide deck as HTML."),
+          slides: z
+            .string()
+            .min(1)
+            .describe(
+              "The complete deck as a single self-contained HTML document " +
+                "(all CSS inline; multiple slides).",
+            ),
         },
       },
       async (args, extra) => {
@@ -222,11 +254,17 @@ const handler = createMcpHandler(
       {
         title: "Get curated deck feedback",
         description:
-          "Return the owner-curated feedback for one of your decks so you can " +
-          "revise it: only included items, with the owner's edits applied and " +
-          "dismissed items excluded. Comments are grouped by slide; requested " +
-          "slides include title/subtitle/body; removal flags include reasons. " +
-          "Owner only.",
+          "Pull the team's curated feedback on one of the user's SlideHuddle " +
+          "decks so you can revise it. Call this before revising a deck to see " +
+          "what changes are requested. Returns only the feedback the deck owner " +
+          "chose to include (dismissed items excluded, owner edits applied): " +
+          "comments grouped by slide, requested new slides (with " +
+          "title/subtitle/body), and slides flagged for removal (with reasons). " +
+          "Read-only. You must own the deck.",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
         inputSchema: {
           deck_id: z
             .string()
@@ -281,16 +319,30 @@ const handler = createMcpHandler(
       {
         title: "Save a revised deck version",
         description:
-          "Save revised slide HTML as a NEW version of an existing deck. Keeps " +
-          "the same deck id and share link, increments the version number, and " +
-          "preserves prior versions in history. Owner only. Returns the new " +
-          "version number and the (unchanged) share_url.",
+          "Save a revised version of an existing SlideHuddle deck. Use this " +
+          "after get_feedback and get_deck_slides to apply revisions to the " +
+          "real deck. Pass the deck_id and the FULL revised, self-contained " +
+          "multi-slide HTML (all CSS inline) as `slides`. Keeps the same " +
+          "deck_id and share link, bumps the version number, and preserves all " +
+          "previous versions in history (non-destructive). You must own the " +
+          "deck. Returns the new version number and the unchanged share_url.",
+        annotations: {
+          // Writes a new version but is non-destructive: prior versions are kept
+          // in history, and the share link is unchanged.
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
         inputSchema: {
           deck_id: z.string().min(1).describe("The deck to update."),
           slides: z
             .string()
             .min(1)
-            .describe("The full revised deck as HTML (replaces the latest version)."),
+            .describe(
+              "The complete revised deck as a single self-contained HTML " +
+                "document (all CSS inline). Saved as the new latest version.",
+            ),
         },
       },
       async (args, extra) => {
@@ -348,13 +400,19 @@ const handler = createMcpHandler(
       {
         title: "List your SlideHuddle decks",
         description:
-          "List the decks owned by the authenticated user, most recently " +
-          "updated first, so you can find a deck's id no matter how it was " +
-          "created (the Chrome extension, the MCP, or another conversation). " +
-          "Read-only — never creates, changes, or deletes anything. For each " +
-          "deck it returns: deck_id, title, version, pending_feedback_count " +
-          "(included, not-yet-sent feedback items), last_updated, and the " +
-          "source Claude conversation link when one is known. Owner only.",
+          "List the user's SlideHuddle decks, most recently updated first, so " +
+          "you can find a deck_id. Use this when the user refers to 'my deck' " +
+          "or 'my slides' without giving an id, or to see how much feedback is " +
+          "waiting across their decks. Read-only — never creates, changes, or " +
+          "deletes anything. Finds decks no matter how they were created (the " +
+          "Chrome extension, this MCP, or another conversation). For each deck " +
+          "it returns: deck_id, title, version, pending_feedback_count " +
+          "(included, not-yet-acted-on feedback items), last_updated, and the " +
+          "source conversation link when one is known.",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
         inputSchema: {},
       },
       async (_args, extra) => {
@@ -414,16 +472,24 @@ const handler = createMcpHandler(
       {
         title: "Get a deck summary",
         description:
-          "Return a summary of one of your decks: title, version, slide_count, " +
-          "share_url, and a feedback summary (counts of comments, requested " +
-          "slides, and removal flags that are currently included). Read-only. " +
-          "Owner only — if the deck doesn't exist or isn't yours, returns a " +
-          "neutral 'not found' (it won't reveal whether the id exists).",
+          "Get a quick summary of one of the user's SlideHuddle decks: title, " +
+          "version, slide_count, share_url, and how much feedback is currently " +
+          "included (counts of comments, requested slides, and removal flags). " +
+          "Use it to check a deck's status without pulling its full HTML. " +
+          "Read-only. You must own the deck — if it doesn't exist or isn't " +
+          "yours, returns a neutral 'not found' (it won't reveal whether the id " +
+          "exists).",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
         inputSchema: {
           deck_id: z
             .string()
-            .uuid()
-            .describe("The deck's id (a UUID from list_decks or the share URL)."),
+            .min(1)
+            .describe(
+              "The deck's id (from list_decks, create_deck, or the share URL).",
+            ),
         },
       },
       async (args, extra) => {
@@ -471,16 +537,24 @@ const handler = createMcpHandler(
       {
         title: "Read a deck's current slides",
         description:
-          "Return the CURRENT version's slide HTML for one of your decks, plus " +
-          "its version and title — so you can revise the actual deck instead of " +
-          "regenerating it blind. Read-only — never creates, changes, or deletes " +
-          "anything. Owner only; if the deck doesn't exist or isn't yours, " +
-          "returns a neutral 'not found' (it won't reveal whether the id exists).",
+          "Read the CURRENT slide HTML of one of the user's SlideHuddle decks, " +
+          "plus its version and title — so you can revise the real deck instead " +
+          "of regenerating it from scratch. Call this together with " +
+          "get_feedback before saving changes with update_deck. Read-only — " +
+          "never creates, changes, or deletes anything. You must own the deck; " +
+          "if it doesn't exist or isn't yours, returns a neutral 'not found' " +
+          "(it won't reveal whether the id exists).",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
         inputSchema: {
           deck_id: z
             .string()
-            .uuid()
-            .describe("The deck's id (a UUID from list_decks or the share URL)."),
+            .min(1)
+            .describe(
+              "The deck's id (from list_decks, create_deck, or the share URL).",
+            ),
         },
       },
       async (args, extra) => {
@@ -507,6 +581,25 @@ const handler = createMcpHandler(
           return textResult(
             "This deck has no stored slide content to read.",
             true,
+          );
+        }
+
+        // Bound the inline response. A deck can be up to MAX_HTML_BYTES (2MB);
+        // returning that in one tool result risks oversized model context and
+        // client limits. Above the ceiling, degrade gracefully: return the
+        // deck's metadata + share link instead of dumping the raw HTML, so the
+        // caller gets a clear, actionable result rather than something
+        // oversized. (Not isError: the read succeeded; the deck is just large.)
+        const htmlBytes = Buffer.byteLength(html, "utf8");
+        if (htmlBytes > MAX_SLIDES_OUTPUT_BYTES) {
+          const kb = (n: number) => Math.round(n / 1024);
+          const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
+          return textResult(
+            `Deck "${meta.title ?? "Untitled"}" (version ${meta.version}) is ` +
+              `${kb(htmlBytes)}KB — too large to return inline (limit ` +
+              `${kb(MAX_SLIDES_OUTPUT_BYTES)}KB). Open it to view or revise: ` +
+              `${shareUrl}\nYou can still save a revised version with ` +
+              `update_deck.`,
           );
         }
 
