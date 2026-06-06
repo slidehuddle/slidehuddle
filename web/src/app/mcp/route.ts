@@ -84,6 +84,19 @@ function textResult(text: string, isError = false) {
   };
 }
 
+// A successful result that ALSO carries machine-readable structuredContent
+// (required by the SDK whenever a tool declares an outputSchema). We keep the
+// human-readable text block too, so clients that don't read structuredContent
+// still get a sensible answer. Error results never carry structuredContent —
+// the SDK exempts isError results from output-schema validation — so failures
+// keep using textResult(..., true).
+function dataResult(text: string, structured: Record<string, unknown>) {
+  return {
+    content: [{ type: "text" as const, text }],
+    structuredContent: structured,
+  };
+}
+
 // If the assistant supplied a title but its HTML has no <title>, inject one so
 // the deck is named the way the assistant intended. The web app derives a
 // deck's title from <title> (then <h1>), so this is enough — we don't touch
@@ -217,6 +230,11 @@ const handler = createMcpHandler(
                 "(all CSS inline; multiple slides).",
             ),
         },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          share_url: z.string(),
+        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -234,10 +252,12 @@ const handler = createMcpHandler(
             userId: auth.userId,
           });
           const shareUrl = `${auth.origin}/viewer?id=${id}`;
-          return textResult(
-            `Created deck "${storedTitle ?? title ?? "Untitled"}".\n` +
+          const finalTitle = storedTitle ?? title ?? "Untitled";
+          return dataResult(
+            `Created deck "${finalTitle}".\n` +
               `deck_id: ${id}\n` +
               `share_url: ${shareUrl}`,
+            { deck_id: id, title: finalTitle, share_url: shareUrl },
           );
         } catch (err) {
           const message =
@@ -273,6 +293,12 @@ const handler = createMcpHandler(
               "The deck's id (from create_deck, list_decks, or the share URL).",
             ),
         },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          feedback_count: z.number(),
+          feedback_text: z.string(),
+        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -302,14 +328,20 @@ const handler = createMcpHandler(
 
         const prompt = buildFeedbackPrompt(curated);
         const count = countFeedbackItems(prompt);
+        const title = meta.title ?? "Untitled";
 
         if (!prompt) {
-          return textResult(
-            `No feedback to act on yet for "${meta.title ?? "Untitled"}" ` +
-              `(0 items).`,
+          return dataResult(
+            `No feedback to act on yet for "${title}" (0 items).`,
+            { deck_id: deckId, title, feedback_count: 0, feedback_text: "" },
           );
         }
-        return textResult(`(${count} feedback item(s))\n\n${prompt}`);
+        return dataResult(`(${count} feedback item(s))\n\n${prompt}`, {
+          deck_id: deckId,
+          title,
+          feedback_count: count,
+          feedback_text: prompt,
+        });
       },
     );
 
@@ -343,6 +375,13 @@ const handler = createMcpHandler(
               "The complete revised deck as a single self-contained HTML " +
                 "document (all CSS inline). Saved as the new latest version.",
             ),
+        },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          version: z.number(),
+          share_url: z.string(),
+          resolved_feedback_count: z.number(),
         },
       },
       async (args, extra) => {
@@ -379,11 +418,19 @@ const handler = createMcpHandler(
                 `(requested slides/flags) so v${version} starts clean`
               : "";
           const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
-          return textResult(
-            `Saved "${title ?? "Untitled"}" as version ${version}.\n` +
+          const finalTitle = title ?? "Untitled";
+          return dataResult(
+            `Saved "${finalTitle}" as version ${version}.\n` +
               `version: ${version}\n` +
               `share_url: ${shareUrl} (unchanged)` +
               resolvedNote,
+            {
+              deck_id: deckId,
+              title: finalTitle,
+              version,
+              share_url: shareUrl,
+              resolved_feedback_count: resolvedCount,
+            },
           );
         } catch (err) {
           const message =
@@ -414,6 +461,20 @@ const handler = createMcpHandler(
           openWorldHint: true,
         },
         inputSchema: {},
+        outputSchema: {
+          count: z.number(),
+          decks: z.array(
+            z.object({
+              deck_id: z.string(),
+              title: z.string(),
+              version: z.number(),
+              pending_feedback_count: z.number().nullable(),
+              last_updated: z.string(),
+              share_url: z.string(),
+              conversation_url: z.string().nullable(),
+            }),
+          ),
+        },
       },
       async (_args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -428,7 +489,10 @@ const handler = createMcpHandler(
           );
         }
         if (rows.length === 0) {
-          return textResult("You don't have any decks yet.");
+          return dataResult("You don't have any decks yet.", {
+            count: 0,
+            decks: [],
+          });
         }
 
         // pending_feedback_count per deck via the same curated path as
@@ -459,9 +523,22 @@ const handler = createMcpHandler(
           );
         });
 
-        return textResult(
+        const decks = rows.map((deck, i) => ({
+          deck_id: deck.id,
+          title: deck.title ?? "Untitled",
+          version: deck.version,
+          pending_feedback_count: pendingCounts[i],
+          last_updated: formatDateOnly(deck.updated_at ?? deck.created_at),
+          share_url: `${auth.origin}/viewer?id=${deck.id}`,
+          conversation_url: deck.conversation_id
+            ? `https://claude.ai/chat/${deck.conversation_id}`
+            : null,
+        }));
+
+        return dataResult(
           `Your decks (${rows.length}), most recent first:\n\n` +
             blocks.join("\n\n"),
+          { count: rows.length, decks },
         );
       },
     );
@@ -491,6 +568,18 @@ const handler = createMcpHandler(
               "The deck's id (from list_decks, create_deck, or the share URL).",
             ),
         },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          version: z.number(),
+          slide_count: z.number().nullable(),
+          share_url: z.string(),
+          feedback: z.object({
+            comments: z.number(),
+            requested_slides: z.number(),
+            flags: z.number(),
+          }),
+        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -518,8 +607,9 @@ const handler = createMcpHandler(
         }
 
         const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
-        return textResult(
-          `Deck "${meta.title ?? "Untitled"}"\n` +
+        const title = meta.title ?? "Untitled";
+        return dataResult(
+          `Deck "${title}"\n` +
             `version: ${meta.version}\n` +
             `slide_count: ${meta.slide_count ?? "unknown"}\n` +
             `share_url: ${shareUrl}\n` +
@@ -527,6 +617,18 @@ const handler = createMcpHandler(
             `  comments: ${curated.comments.length}\n` +
             `  requested_slides: ${curated.stubs.length}\n` +
             `  flags: ${curated.flags.length}`,
+          {
+            deck_id: deckId,
+            title,
+            version: meta.version,
+            slide_count: meta.slide_count ?? null,
+            share_url: shareUrl,
+            feedback: {
+              comments: curated.comments.length,
+              requested_slides: curated.stubs.length,
+              flags: curated.flags.length,
+            },
+          },
         );
       },
     );
@@ -556,6 +658,14 @@ const handler = createMcpHandler(
               "The deck's id (from list_decks, create_deck, or the share URL).",
             ),
         },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          version: z.number(),
+          slides_html: z.string().nullable(),
+          truncated: z.boolean(),
+          share_url: z.string(),
+        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -584,6 +694,9 @@ const handler = createMcpHandler(
           );
         }
 
+        const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
+        const title = meta.title ?? "Untitled";
+
         // Bound the inline response. A deck can be up to MAX_HTML_BYTES (2MB);
         // returning that in one tool result risks oversized model context and
         // client limits. Above the ceiling, degrade gracefully: return the
@@ -593,21 +706,173 @@ const handler = createMcpHandler(
         const htmlBytes = Buffer.byteLength(html, "utf8");
         if (htmlBytes > MAX_SLIDES_OUTPUT_BYTES) {
           const kb = (n: number) => Math.round(n / 1024);
-          const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
-          return textResult(
-            `Deck "${meta.title ?? "Untitled"}" (version ${meta.version}) is ` +
+          return dataResult(
+            `Deck "${title}" (version ${meta.version}) is ` +
               `${kb(htmlBytes)}KB — too large to return inline (limit ` +
               `${kb(MAX_SLIDES_OUTPUT_BYTES)}KB). Open it to view or revise: ` +
               `${shareUrl}\nYou can still save a revised version with ` +
               `update_deck.`,
+            {
+              deck_id: deckId,
+              title,
+              version: meta.version,
+              slides_html: null,
+              truncated: true,
+              share_url: shareUrl,
+            },
           );
         }
 
-        return textResult(
-          `Deck "${meta.title ?? "Untitled"}" — current slides (version ` +
+        return dataResult(
+          `Deck "${title}" — current slides (version ` +
             `${meta.version}). Revise these and save with update_deck.\n\n` +
             html,
+          {
+            deck_id: deckId,
+            title,
+            version: meta.version,
+            slides_html: html,
+            truncated: false,
+            share_url: shareUrl,
+          },
         );
+      },
+    );
+
+    // --- search (ChatGPT-style discovery alias, read-only) ---------------
+    // ChatGPT (and other "connector" clients) have a strong default toward
+    // generic `search` + `fetch` retrieval and may not reach for our named
+    // tools on their own. These two aliases map that default behaviour onto the
+    // existing owner-scoped read paths, so a client that only knows how to
+    // "search the connector" can still find and read the user's decks. They add
+    // NO new capability or access — same token-only identity and owner gating as
+    // list_decks / get_deck_slides; they're just a second doorway to the same
+    // data. `search` returns the {id,title,url} result shape these clients
+    // expect (also as JSON text for clients that read content, not
+    // structuredContent).
+    server.registerTool(
+      "search",
+      {
+        title: "Search your SlideHuddle decks",
+        description:
+          "Search the user's SlideHuddle decks by title and return matches as a " +
+          "list of results (id, title, url). Pass an empty query to list every " +
+          "deck. Use the returned id with `fetch` to read a deck's slides. " +
+          "Read-only; only ever returns decks the user owns.",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
+        inputSchema: {
+          query: z
+            .string()
+            .describe(
+              "Words to match against deck titles (case-insensitive). Empty " +
+                "string returns all of the user's decks.",
+            ),
+        },
+        outputSchema: {
+          results: z.array(
+            z.object({
+              id: z.string(),
+              title: z.string(),
+              url: z.string(),
+            }),
+          ),
+        },
+      },
+      async (args, extra) => {
+        const auth = getAuthExtra(extra.authInfo);
+        if (!auth) return textResult("Not authenticated.", true);
+
+        const query = String(args.query ?? "").trim().toLowerCase();
+        const { rows, failed } = await getDecksForOwner(auth.userId);
+        if (failed) {
+          return textResult(
+            "Couldn't search your decks right now — please try again.",
+            true,
+          );
+        }
+        const matched = query
+          ? rows.filter((d) => (d.title ?? "").toLowerCase().includes(query))
+          : rows;
+        const results = matched.map((d) => ({
+          id: d.id,
+          title: d.title ?? "Untitled",
+          url: `${auth.origin}/viewer?id=${d.id}`,
+        }));
+        // Text body is the JSON result set (the contract some connector clients
+        // read from content rather than structuredContent).
+        return dataResult(JSON.stringify({ results }), { results });
+      },
+    );
+
+    // --- fetch (ChatGPT-style document read alias, read-only) ------------
+    server.registerTool(
+      "fetch",
+      {
+        title: "Fetch a SlideHuddle deck's contents",
+        description:
+          "Fetch one of the user's SlideHuddle decks by id (from `search`) and " +
+          "return its current slide HTML as a document (id, title, text, url). " +
+          "Use this to read a deck before revising it. Read-only; you must own " +
+          "the deck, otherwise a neutral 'not found' is returned.",
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: true,
+        },
+        inputSchema: {
+          id: z
+            .string()
+            .min(1)
+            .describe("The deck id to fetch (from `search` or the share URL)."),
+        },
+        outputSchema: {
+          id: z.string(),
+          title: z.string(),
+          text: z.string(),
+          url: z.string(),
+          metadata: z.record(z.string(), z.string()).nullable(),
+        },
+      },
+      async (args, extra) => {
+        const auth = getAuthExtra(extra.authInfo);
+        if (!auth) return textResult("Not authenticated.", true);
+
+        const deckId = String(args.id ?? "");
+        // Same owner-only gate + neutral not-found as the other read tools.
+        const meta = await loadOwnedDeck(deckId, auth.userId);
+        if (!meta) {
+          return textResult("Deck not found, or you are not its owner.", true);
+        }
+
+        const { html, failed } = await getStoredSlides(deckId);
+        if (failed) {
+          return textResult(
+            "Couldn't load this deck right now — please try again.",
+            true,
+          );
+        }
+
+        const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
+        const title = meta.title ?? "Untitled";
+        const metadata = {
+          version: String(meta.version),
+          share_url: shareUrl,
+        };
+
+        // Same inline-size bound as get_deck_slides: if the deck HTML is too
+        // large to return in one result, hand back a pointer instead of the raw
+        // document rather than something oversized.
+        const body = html ?? "";
+        const htmlBytes = Buffer.byteLength(body, "utf8");
+        const tooLarge = htmlBytes > MAX_SLIDES_OUTPUT_BYTES;
+        const text = tooLarge
+          ? `This deck is too large to return inline. Open it at ${shareUrl}.`
+          : body;
+
+        const doc = { id: deckId, title, text, url: shareUrl, metadata };
+        return dataResult(JSON.stringify(doc), doc);
       },
     );
   },
