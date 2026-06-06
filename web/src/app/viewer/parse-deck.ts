@@ -22,6 +22,14 @@ export type ParsedDeck = {
   /** Detected (or default) natural canvas the deck was designed for. */
   slideWidth: number;
   slideHeight: number;
+  /** True when slideWidth/slideHeight were DETECTED from the deck's own CSS
+   *  (vs. falling back to the default canvas). When true, the viewer trusts
+   *  these dimensions and does NOT let the runtime measure-script override them
+   *  — otherwise the measured content box (which can include inter-slide
+   *  margins, transient animation states, or overflow) snaps the canvas to a
+   *  slightly different size and the slide visibly resizes. The measurement
+   *  path stays active only when this is false. */
+  dimsDetected: boolean;
 };
 
 export const EMPTY_DECK: ParsedDeck = {
@@ -30,6 +38,7 @@ export const EMPTY_DECK: ParsedDeck = {
   hasAuthoredStyles: false,
   slideWidth: DEFAULT_SLIDE_W,
   slideHeight: DEFAULT_SLIDE_H,
+  dimsDetected: false,
 };
 
 export function parseDeck(rawHtml: string): ParsedDeck {
@@ -59,10 +68,12 @@ export function parseDeck(rawHtml: string): ParsedDeck {
   const doc = new DOMParser().parseFromString(trimmed, "text/html");
   const headHtml = extractHeadHtml(doc);
   const hasAuthoredStyles = /<style[\s>]/i.test(headHtml);
-  const dims = detectSlideDimensions(doc) ?? {
+  const detected = detectSlideDimensions(doc);
+  const dims = detected ?? {
     width: DEFAULT_SLIDE_W,
     height: DEFAULT_SLIDE_H,
   };
+  const dimsDetected = detected !== null;
 
   // Strategy 1: Claude's inline-deck format — <div class="slide"> blocks.
   // CSS selector .slide matches `class="slide"` and `class="slide foo"` but
@@ -85,6 +96,7 @@ export function parseDeck(rawHtml: string): ParsedDeck {
       hasAuthoredStyles,
       slideWidth: dims.width,
       slideHeight: dims.height,
+      dimsDetected,
     };
   }
 
@@ -105,6 +117,7 @@ export function parseDeck(rawHtml: string): ParsedDeck {
       hasAuthoredStyles,
       slideWidth: dims.width,
       slideHeight: dims.height,
+      dimsDetected,
     };
   }
 
@@ -115,6 +128,7 @@ export function parseDeck(rawHtml: string): ParsedDeck {
     hasAuthoredStyles,
     slideWidth: dims.width,
     slideHeight: dims.height,
+    dimsDetected,
   };
 }
 

@@ -183,8 +183,16 @@ export default function SlideViewer({
     }
   }, [focusStubId, displayItems]);
 
-  const effectiveW = measuredCanvas?.w ?? deck.slideWidth;
-  const effectiveH = measuredCanvas?.h ?? deck.slideHeight;
+  // When the deck declares its own slide canvas (dimsDetected), trust those
+  // dimensions and ignore the runtime measurement. Letting the measured content
+  // box win would snap the canvas to a slightly different size — it can include
+  // inter-slide margins, transient animation states, or overflow — which shows
+  // up as a visible "resize then settle" jump when navigating slides. The
+  // measurement path stays active only for decks with no detectable canvas
+  // (e.g. self-contained artifacts that inject/animate content into place).
+  const useMeasured = !deck.dimsDetected;
+  const effectiveW = (useMeasured ? measuredCanvas?.w : undefined) ?? deck.slideWidth;
+  const effectiveH = (useMeasured ? measuredCanvas?.h : undefined) ?? deck.slideHeight;
 
   // Reset measurement whenever the slide content changes.
   useEffect(() => {
@@ -860,6 +868,10 @@ export default function SlideViewer({
                   currentSlideHtml,
                   deck.headHtml,
                   deck.hasAuthoredStyles,
+                  // Only run the measure script when we're actually relying on
+                  // the measurement (no detected canvas); trusted-dimension
+                  // decks don't need it.
+                  { measure: useMeasured },
                 )}
                 sandbox="allow-scripts"
                 className="border-0 block bg-white absolute top-1/2 left-1/2"
