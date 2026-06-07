@@ -482,8 +482,6 @@ const handler = createMcpHandler(
         inputSchema: {},
         outputSchema: {
           count: z.number(),
-          total: z.number(),
-          truncated: z.boolean(),
           decks: z.array(
             z.object({
               deck_id: z.string(),
@@ -514,8 +512,6 @@ const handler = createMcpHandler(
         if (rows.length === 0) {
           return dataResult("You don't have any decks yet.", {
             count: 0,
-            total: 0,
-            truncated: false,
             decks: [],
           });
         }
@@ -560,15 +556,17 @@ const handler = createMcpHandler(
             : null,
         }));
 
-        const truncated = total > rows.length;
-        const header = truncated
-          ? `Your ${rows.length} most recently updated decks (of ${total} ` +
-            `total). Use search to find an older deck by title.`
-          : `Your decks (${rows.length}), most recent first:`;
+        // The cap is a behavioural bound; we surface "showing N of M" in the
+        // human-readable text only, and keep structuredContent at its original
+        // { count, decks } shape so already-connected clients (which cached that
+        // schema) don't see a changed result shape.
+        const header =
+          total > rows.length
+            ? `Your ${rows.length} most recently updated decks (of ${total} ` +
+              `total). Use search to find an older deck by title.`
+            : `Your decks (${rows.length}), most recent first:`;
         return dataResult(`${header}\n\n${blocks.join("\n\n")}`, {
           count: rows.length,
-          total,
-          truncated,
           decks,
         });
       },
@@ -689,6 +687,14 @@ const handler = createMcpHandler(
               "The deck's id (from list_decks, create_deck, or the share URL).",
             ),
         },
+        outputSchema: {
+          deck_id: z.string(),
+          title: z.string(),
+          version: z.number(),
+          slides_html: z.string().nullable(),
+          truncated: z.boolean(),
+          share_url: z.string(),
+        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -723,28 +729,45 @@ const handler = createMcpHandler(
         // Minify the copy we return so it fits Anthropic's 25k-token result cap.
         // This shrinks ONLY the transient model-read copy; the stored deck is
         // untouched, and a saved revision uses the assistant's own fresh HTML.
-        // The HTML is included exactly ONCE (in the text block) — deliberately
-        // no structuredContent copy, which would double the token count.
         const slides = minifyDeckHtmlForRead(html);
-        const body =
-          `Deck "${title}" — current slides (version ${meta.version}). ` +
-          `Revise these and save with update_deck.\n\n${slides}`;
 
-        // If even the minified deck would exceed the inline budget, degrade
-        // gracefully to a share-link pointer instead of returning oversized HTML.
+        // The HTML is echoed in BOTH the text block and structuredContent
+        // (slides_html), so it effectively counts twice toward the 25k-token cap
+        // — gate on that combined size. If even the minified deck is too large,
+        // degrade gracefully to a share-link pointer instead of oversized HTML.
         // (Not isError: the read succeeded; the deck is just too large to inline.
         // Pagination is the planned path for returning very large decks in full.)
-        if (estimateTokens(body) > INLINE_TOKEN_BUDGET) {
+        const combinedTokens = 2 * estimateTokens(slides);
+        if (combinedTokens > INLINE_TOKEN_BUDGET) {
           const approxKb = Math.round(Buffer.byteLength(slides, "utf8") / 1024);
-          return textResult(
+          return dataResult(
             `Deck "${title}" (version ${meta.version}) is too large to return ` +
               `inline (~${approxKb}KB after minifying, over the inline limit). ` +
               `Open it to view or revise: ${shareUrl}\nYou can still save a ` +
               `revised version with update_deck.`,
+            {
+              deck_id: deckId,
+              title,
+              version: meta.version,
+              slides_html: null,
+              truncated: true,
+              share_url: shareUrl,
+            },
           );
         }
 
-        return textResult(body);
+        return dataResult(
+          `Deck "${title}" — current slides (version ${meta.version}). ` +
+            `Revise these and save with update_deck.\n\n${slides}`,
+          {
+            deck_id: deckId,
+            title,
+            version: meta.version,
+            slides_html: slides,
+            truncated: false,
+            share_url: shareUrl,
+          },
+        );
       },
     );
 
