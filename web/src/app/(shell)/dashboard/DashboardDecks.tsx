@@ -47,6 +47,81 @@ function CommentIcon() {
   );
 }
 
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+// Empty-state prompt shown when the user owns no decks. Nudges them to add
+// SlideHuddle as a custom connector in Claude (by pasting the /mcp URL) so they
+// can start their own collaborative decks — a low-key growth surface that keeps
+// the "My decks" heading present even before they've captured anything.
+function StartYourOwnPrompt({ mcpUrl }: { mcpUrl: string }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(mcpUrl);
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard blocked (e.g. insecure context) — leave the URL visible so
+      // the user can still select and copy it by hand.
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-dashed border-border bg-brand/[0.03] p-5 flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <h3 className="font-semibold text-foreground">Start your own decks</h3>
+        <p className="text-sm text-muted max-w-xl">
+          Add SlideHuddle to Claude as a custom connector, then just ask Claude
+          to build a presentation — your decks land here, ready to share and
+          collect feedback on.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="flex-1 min-w-0 truncate rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground font-mono">
+          {mcpUrl}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand/90"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          {copied ? "Copied" : "Copy URL"}
+        </button>
+      </div>
+      <p className="text-xs text-muted">
+        In Claude: Settings → Connectors → Add custom connector, then paste this
+        URL.
+      </p>
+    </div>
+  );
+}
+
 function DeckCard({
   deck,
   onRequestDelete,
@@ -254,9 +329,11 @@ function ConfirmDialog({
 export default function DashboardDecks({
   owned,
   shared,
+  mcpUrl,
 }: {
   owned: DeckCardData[];
   shared: DeckCardData[];
+  mcpUrl: string;
 }) {
   // Optimistic removal: ids hidden from the lists immediately on confirm.
   const [removed, setRemoved] = useState<Set<string>>(new Set());
@@ -331,55 +408,44 @@ export default function DashboardDecks({
 
   const visibleOwned = owned.filter((d) => !removed.has(d.id));
   const visibleShared = shared.filter((d) => !removed.has(d.id));
-  const bothEmpty = visibleOwned.length === 0 && visibleShared.length === 0;
 
   return (
     <>
-      {bothEmpty ? (
-        <div className="rounded-2xl border border-dashed border-border px-8 py-16 text-center flex flex-col items-center gap-3">
-          <h2 className="text-lg font-semibold text-foreground">No decks yet</h2>
-          <p className="text-muted max-w-md">
-            Go to Claude.ai and create a presentation, then click{" "}
-            <span className="font-semibold text-foreground">
-              Open in SlideHuddle
-            </span>
-            .
-          </p>
-        </div>
-      ) : (
-        <>
-          {visibleOwned.length > 0 && (
-            <section className="flex flex-col gap-4">
-              <h2 className="text-lg font-semibold text-foreground">My decks</h2>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {visibleOwned.map((deck) => (
-                  <DeckCard
-                    key={deck.id}
-                    deck={deck}
-                    onRequestDelete={requestDelete}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
+      {/* "My decks" is always present — when the user owns nothing it collapses
+          to a small connector prompt rather than disappearing, so there's a
+          steady nudge to start their own decks. */}
+      <section className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-foreground">My decks</h2>
+        {visibleOwned.length > 0 ? (
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {visibleOwned.map((deck) => (
+              <DeckCard
+                key={deck.id}
+                deck={deck}
+                onRequestDelete={requestDelete}
+              />
+            ))}
+          </ul>
+        ) : (
+          <StartYourOwnPrompt mcpUrl={mcpUrl} />
+        )}
+      </section>
 
-          {visibleShared.length > 0 && (
-            <section className="flex flex-col gap-4">
-              <h2 className="text-lg font-semibold text-foreground">
-                Shared with me
-              </h2>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {visibleShared.map((deck) => (
-                  <DeckCard
-                    key={deck.id}
-                    deck={deck}
-                    onRequestDelete={requestDelete}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
-        </>
+      {visibleShared.length > 0 && (
+        <section className="flex flex-col gap-4">
+          <h2 className="text-lg font-semibold text-foreground">
+            Shared with me
+          </h2>
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {visibleShared.map((deck) => (
+              <DeckCard
+                key={deck.id}
+                deck={deck}
+                onRequestDelete={requestDelete}
+              />
+            ))}
+          </ul>
+        </section>
       )}
 
       {dialogDeck && (

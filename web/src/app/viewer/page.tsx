@@ -223,8 +223,25 @@ export default async function ViewerPage({
   // on historical views; comments are version-scoped and line up correctly.
   const viewerDeckId = source === "stored" ? id ?? null : null;
   const readOnly = viewingHistorical;
-  const viewerStubs = viewingHistorical ? [] : initialStubs;
-  const viewerFlags = viewingHistorical ? [] : initialFlags;
+
+  // Privacy: the email of the teammate who requested a slide or flagged one is
+  // resolved server-side (getStubsForDeck / getFlagsForDeck) and would otherwise
+  // be serialized into the page for EVERY viewer — including anonymous people who
+  // merely hold the share link. Collaborator identities must not leak to
+  // not-signed-in viewers, so null those email fields unless the viewer is signed
+  // in. (Signed-in viewers are recorded as the owner or a shared recipient, i.e.
+  // part of the deck's collaboration, so they may see who left feedback.)
+  const canSeeCollaboratorEmails = currentUserId !== null;
+  const redactStubEmails = (rows: StubRow[]): StubRow[] =>
+    canSeeCollaboratorEmails
+      ? rows
+      : rows.map((r) => ({ ...r, requested_by_email: null }));
+  const redactFlagEmails = (rows: FlagRow[]): FlagRow[] =>
+    canSeeCollaboratorEmails
+      ? rows
+      : rows.map((r) => ({ ...r, flagged_by_email: null }));
+  const viewerStubs = viewingHistorical ? [] : redactStubEmails(initialStubs);
+  const viewerFlags = viewingHistorical ? [] : redactFlagEmails(initialFlags);
 
   const viewerPath = id
     ? `/viewer?id=${id}${isCaptureSource ? "&source=capture" : ""}`

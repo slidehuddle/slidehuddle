@@ -7,6 +7,7 @@ import {
 } from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { mintDeckWriteToken, verifyDeckWriteToken } from "@/lib/update-token";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Header the extension sends a deck write token in (see lib/update-token.ts).
 // Lower-cased for case-insensitive header lookup.
@@ -16,6 +17,34 @@ const UPDATE_TOKEN_HEADER = "x-slidehuddle-update-token";
 // 500KB; 2MB leaves comfortable headroom for image-heavy decks while
 // preventing megabyte-scale junk inserts into Supabase.
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
+
+// Per-IP rate limit on capture/update. This endpoint is gated by the origin
+// allowlist, but a non-browser client can forge an Origin header, so the
+// allowlist alone doesn't stop a script from flooding the DB with decks. A
+// generous ceiling stops that abuse without getting in a real user's way:
+// capturing a deck is a deliberate button click — even a busy session is a
+// handful per minute, far under this. Tunable via SLIDES_RATE_LIMIT_PER_MIN.
+// NOTE: the limiter is in-memory and per-serverless-instance (see
+// lib/rate-limit.ts) — a real speed bump against a single hammering client, not
+// a hard global cap. Swap the store for Redis/Supabase if a global cap is ever
+// required.
+const RATE_LIMIT_PER_MIN = (() => {
+  const n = Number.parseInt(process.env.SLIDES_RATE_LIMIT_PER_MIN ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+})();
+const RATE_WINDOW_MS = 60_000;
+
+// Best-effort client IP from the proxy headers Vercel sets. Falls back to a
+// single shared bucket ("unknown") when no IP header is present — that's a
+// stricter-than-intended grouping, which is the safe direction for a limiter.
+function clientIp(request: NextRequest): string {
+  const fwd = request.headers.get("x-forwarded-for");
+  if (fwd) {
+    const first = fwd.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
+}
 
 // Only the extension (running on claude.ai or one of Claude's user/MCP
 // content origins) should be able to POST. Anything else gets no CORS
@@ -74,6 +103,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "Origin not allowed" },
       { status: 403 },
+    );
+  }
+
+  // Throttle by IP before we do any work (parse body, hit Supabase). Keyed
+  // separately from the MCP limiter so the two don't share buckets.
+  const rl = checkRateLimit(
+    `slides:${clientIp(request)}`,
+    RATE_LIMIT_PER_MIN,
+    RATE_WINDOW_MS,
+  );
+  if (!rl.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many requests",
+        detail: `Rate limit is ${rl.limit} per minute. Retry in ${rl.retryAfterSec}s.`,
+      },
+      {
+        status: 429,
+        headers: {
+          ...headers,
+          "Retry-After": String(rl.retryAfterSec),
+          "RateLimit-Limit": String(rl.limit),
+          "RateLimit-Remaining": String(rl.remaining),
+        },
+      },
     );
   }
 

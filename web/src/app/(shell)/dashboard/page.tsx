@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import {
   getDeckCommentCountsForUser,
@@ -111,6 +112,17 @@ export default async function DashboardPage() {
   // every deck silently read as "0 comments".
   const commentCountsFailed = commentCountsResult.failed;
 
+  // The public MCP connector URL users paste into Claude to add SlideHuddle as
+  // a custom connector. Built from the forwarded host (same logic the MCP
+  // discovery routes use via mcp-handler's getPublicOrigin) so it's correct
+  // behind Vercel's proxy.
+  const hdrs = await headers();
+  const forwardedHost = hdrs.get("x-forwarded-host")?.split(",")[0].trim();
+  const host = forwardedHost || hdrs.get("host") || "";
+  const proto =
+    hdrs.get("x-forwarded-proto")?.split(",")[0].trim() || "https";
+  const mcpUrl = host ? `${proto}://${host}/mcp` : "/mcp";
+
   // Shape serializable card data for the client component (which owns the
   // hover-delete / confirm / undo interactions).
   const ownedCards: DeckCardData[] = ownDecks.map((deck) => {
@@ -184,7 +196,11 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        <DashboardDecks owned={ownedCards} shared={sharedCards} />
+        <DashboardDecks
+          owned={ownedCards}
+          shared={sharedCards}
+          mcpUrl={mcpUrl}
+        />
       </section>
     </main>
   );

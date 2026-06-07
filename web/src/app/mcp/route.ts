@@ -42,6 +42,7 @@ import {
 } from "@/app/viewer/feedback-prompt";
 import { parseAccessToken } from "@/lib/mcp-oauth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { minifyDeckHtmlForRead } from "@/lib/minify-deck-html";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -51,17 +52,33 @@ export const maxDuration = 60;
 // entry points reject the same oversized payloads.
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 
-// Upper bound on the slide HTML get_deck_slides will return INLINE in a single
-// tool result. A deck can legitimately be up to MAX_HTML_BYTES (2MB), but
-// dumping that into one assistant response is risky (oversized context, client
-// limits), so above this ceiling we degrade gracefully — return the deck's
-// metadata + share link instead of the raw HTML — rather than emitting
-// something oversized. Generous so ordinary decks (well under 500KB) are always
-// returned in full; only pathologically large decks hit the fallback. Tunable
-// via MCP_MAX_SLIDES_OUTPUT_BYTES (default 1MB).
-const MAX_SLIDES_OUTPUT_BYTES = (() => {
-  const n = Number.parseInt(process.env.MCP_MAX_SLIDES_OUTPUT_BYTES ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? n : 1024 * 1024;
+// Anthropic caps a single MCP tool result at 25,000 tokens. The read tools
+// (get_deck_slides / fetch) can return a whole deck, so we (1) minify the copy
+// we hand the model — see lib/minify-deck-html — and (2) gate the INLINE return
+// on a token budget kept safely BELOW the 25k cap. Tokens are approximated from
+// characters (~3.5 chars/token for HTML/CSS), with headroom for the surrounding
+// text and for estimate error, so even a denser-tokenising deck can't blow the
+// cap. A deck whose result would exceed the budget degrades gracefully to a
+// share-link pointer rather than returning oversized HTML. The minified copy is
+// transient (model-read only); the stored deck is never altered. Tunable via
+// MCP_INLINE_TOKEN_BUDGET (default 22000).
+const CHARS_PER_TOKEN = 3.5;
+const INLINE_TOKEN_BUDGET = (() => {
+  const n = Number.parseInt(process.env.MCP_INLINE_TOKEN_BUDGET ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 22000;
+})();
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+// Cap on how many decks list_decks returns (most-recent-first). Bounds both the
+// result size and the per-deck feedback lookups it does, so a huge account can't
+// blow the 25k-token result cap or fan out into hundreds of queries. Older decks
+// remain reachable via `search` (by title) or their share link. Tunable via
+// MCP_LIST_DECKS_LIMIT (default 50).
+const MAX_LIST_DECKS = (() => {
+  const n = Number.parseInt(process.env.MCP_LIST_DECKS_LIMIT ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 50;
 })();
 
 // What we stash in the verified token's `extra`, recovered inside each tool.
@@ -455,7 +472,9 @@ const handler = createMcpHandler(
           "Chrome extension, this MCP, or another conversation). For each deck " +
           "it returns: deck_id, title, version, pending_feedback_count " +
           "(included, not-yet-acted-on feedback items), last_updated, and the " +
-          "source conversation link when one is known.",
+          "source conversation link when one is known. Returns the most-recently-" +
+          "updated decks up to a fixed cap; if the user has more, the result says " +
+          "so — use `search` to find an older deck by title.",
         annotations: {
           readOnlyHint: true,
           openWorldHint: true,
@@ -463,6 +482,8 @@ const handler = createMcpHandler(
         inputSchema: {},
         outputSchema: {
           count: z.number(),
+          total: z.number(),
+          truncated: z.boolean(),
           decks: z.array(
             z.object({
               deck_id: z.string(),
@@ -480,7 +501,9 @@ const handler = createMcpHandler(
         const auth = getAuthExtra(extra.authInfo);
         if (!auth) return textResult("Not authenticated.", true);
 
-        const { rows, failed } = await getDecksForOwner(auth.userId);
+        const { rows, failed, total } = await getDecksForOwner(auth.userId, {
+          limit: MAX_LIST_DECKS,
+        });
         // A load error must NOT look like "no decks" — surface it explicitly.
         if (failed) {
           return textResult(
@@ -491,6 +514,8 @@ const handler = createMcpHandler(
         if (rows.length === 0) {
           return dataResult("You don't have any decks yet.", {
             count: 0,
+            total: 0,
+            truncated: false,
             decks: [],
           });
         }
@@ -535,11 +560,17 @@ const handler = createMcpHandler(
             : null,
         }));
 
-        return dataResult(
-          `Your decks (${rows.length}), most recent first:\n\n` +
-            blocks.join("\n\n"),
-          { count: rows.length, decks },
-        );
+        const truncated = total > rows.length;
+        const header = truncated
+          ? `Your ${rows.length} most recently updated decks (of ${total} ` +
+            `total). Use search to find an older deck by title.`
+          : `Your decks (${rows.length}), most recent first:`;
+        return dataResult(`${header}\n\n${blocks.join("\n\n")}`, {
+          count: rows.length,
+          total,
+          truncated,
+          decks,
+        });
       },
     );
 
@@ -658,14 +689,6 @@ const handler = createMcpHandler(
               "The deck's id (from list_decks, create_deck, or the share URL).",
             ),
         },
-        outputSchema: {
-          deck_id: z.string(),
-          title: z.string(),
-          version: z.number(),
-          slides_html: z.string().nullable(),
-          truncated: z.boolean(),
-          share_url: z.string(),
-        },
       },
       async (args, extra) => {
         const auth = getAuthExtra(extra.authInfo);
@@ -697,45 +720,31 @@ const handler = createMcpHandler(
         const shareUrl = `${auth.origin}/viewer?id=${deckId}`;
         const title = meta.title ?? "Untitled";
 
-        // Bound the inline response. A deck can be up to MAX_HTML_BYTES (2MB);
-        // returning that in one tool result risks oversized model context and
-        // client limits. Above the ceiling, degrade gracefully: return the
-        // deck's metadata + share link instead of dumping the raw HTML, so the
-        // caller gets a clear, actionable result rather than something
-        // oversized. (Not isError: the read succeeded; the deck is just large.)
-        const htmlBytes = Buffer.byteLength(html, "utf8");
-        if (htmlBytes > MAX_SLIDES_OUTPUT_BYTES) {
-          const kb = (n: number) => Math.round(n / 1024);
-          return dataResult(
-            `Deck "${title}" (version ${meta.version}) is ` +
-              `${kb(htmlBytes)}KB — too large to return inline (limit ` +
-              `${kb(MAX_SLIDES_OUTPUT_BYTES)}KB). Open it to view or revise: ` +
-              `${shareUrl}\nYou can still save a revised version with ` +
-              `update_deck.`,
-            {
-              deck_id: deckId,
-              title,
-              version: meta.version,
-              slides_html: null,
-              truncated: true,
-              share_url: shareUrl,
-            },
+        // Minify the copy we return so it fits Anthropic's 25k-token result cap.
+        // This shrinks ONLY the transient model-read copy; the stored deck is
+        // untouched, and a saved revision uses the assistant's own fresh HTML.
+        // The HTML is included exactly ONCE (in the text block) — deliberately
+        // no structuredContent copy, which would double the token count.
+        const slides = minifyDeckHtmlForRead(html);
+        const body =
+          `Deck "${title}" — current slides (version ${meta.version}). ` +
+          `Revise these and save with update_deck.\n\n${slides}`;
+
+        // If even the minified deck would exceed the inline budget, degrade
+        // gracefully to a share-link pointer instead of returning oversized HTML.
+        // (Not isError: the read succeeded; the deck is just too large to inline.
+        // Pagination is the planned path for returning very large decks in full.)
+        if (estimateTokens(body) > INLINE_TOKEN_BUDGET) {
+          const approxKb = Math.round(Buffer.byteLength(slides, "utf8") / 1024);
+          return textResult(
+            `Deck "${title}" (version ${meta.version}) is too large to return ` +
+              `inline (~${approxKb}KB after minifying, over the inline limit). ` +
+              `Open it to view or revise: ${shareUrl}\nYou can still save a ` +
+              `revised version with update_deck.`,
           );
         }
 
-        return dataResult(
-          `Deck "${title}" — current slides (version ` +
-            `${meta.version}). Revise these and save with update_deck.\n\n` +
-            html,
-          {
-            deck_id: deckId,
-            title,
-            version: meta.version,
-            slides_html: html,
-            truncated: false,
-            share_url: shareUrl,
-          },
-        );
+        return textResult(body);
       },
     );
 
@@ -861,15 +870,24 @@ const handler = createMcpHandler(
           share_url: shareUrl,
         };
 
-        // Same inline-size bound as get_deck_slides: if the deck HTML is too
-        // large to return in one result, hand back a pointer instead of the raw
-        // document rather than something oversized.
-        const body = html ?? "";
-        const htmlBytes = Buffer.byteLength(body, "utf8");
-        const tooLarge = htmlBytes > MAX_SLIDES_OUTPUT_BYTES;
-        const text = tooLarge
-          ? `This deck is too large to return inline. Open it at ${shareUrl}.`
-          : body;
+        // Minify the document we return (model-read copy only; stored deck
+        // untouched). fetch echoes the doc BOTH as JSON text and as
+        // structuredContent, so the body is effectively counted twice — gate on
+        // that combined size against the 25k-token cap. If too large, hand back a
+        // share-link pointer instead of the raw document.
+        const minified = minifyDeckHtmlForRead(html ?? "");
+        const fullDoc = {
+          id: deckId,
+          title,
+          text: minified,
+          url: shareUrl,
+          metadata,
+        };
+        const combinedTokens = 2 * estimateTokens(JSON.stringify(fullDoc));
+        const text =
+          combinedTokens > INLINE_TOKEN_BUDGET
+            ? `This deck is too large to return inline. Open it at ${shareUrl}.`
+            : minified;
 
         const doc = { id: deckId, title, text, url: shareUrl, metadata };
         return dataResult(JSON.stringify(doc), doc);

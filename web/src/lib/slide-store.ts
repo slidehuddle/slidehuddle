@@ -405,51 +405,69 @@ type OwnedDeckQueryRow = {
   claude_conversation_id?: string | null;
 };
 
+// `options.limit` caps how many decks are returned (most-recent-first), which
+// also bounds the per-deck feedback work the MCP list tool does downstream. When
+// a cap is applied we also return `total` (the exact number of decks the user
+// owns) so the caller can tell whether more exist beyond the returned page;
+// without a cap, `total` equals the number of rows returned.
 export async function getDecksForOwner(
   userId: string,
-): Promise<ListLoad<OwnedDeckRow>> {
+  options: { limit?: number } = {},
+): Promise<ListLoad<OwnedDeckRow> & { total: number }> {
   const supabase = getSupabaseAdmin();
   const baseCols = "id, title, version, updated_at, created_at";
   const order = { ascending: false, nullsFirst: false } as const;
+  const limit = options.limit && options.limit > 0 ? options.limit : undefined;
   let conversationKnown = true;
+  // Build the owner-scoped, newest-first query, optionally capped to `limit`.
+  const runQuery = (cols: string) => {
+    const q = supabase
+      .from("decks")
+      .select(cols)
+      .eq("user_id", userId)
+      .order("updated_at", order);
+    return limit ? q.limit(limit) : q;
+  };
   // Two selects infer different row shapes, so capture each result separately
   // and normalise via OwnedDeckQueryRow rather than reassigning one binding.
-  const first = await supabase
-    .from("decks")
-    .select(`${baseCols}, claude_conversation_id`)
-    .eq("user_id", userId)
-    .order("updated_at", order);
+  const first = await runQuery(`${baseCols}, claude_conversation_id`);
   let data = first.data as unknown as OwnedDeckQueryRow[] | null;
   let error = first.error;
   if (error && isMissingColumnError(error)) {
     conversationKnown = false;
-    const fallback = await supabase
-      .from("decks")
-      .select(baseCols)
-      .eq("user_id", userId)
-      .order("updated_at", order);
+    const fallback = await runQuery(baseCols);
     data = fallback.data as unknown as OwnedDeckQueryRow[] | null;
     error = fallback.error;
   }
   if (error) {
     logDbError("owned decks fetch failed", error);
-    return { rows: [], failed: true };
+    return { rows: [], failed: true, total: 0 };
   }
   const raw = data ?? [];
-  return {
-    rows: raw.map((row) => ({
-      id: row.id,
-      title: row.title,
-      version:
-        typeof row.version === "number" && row.version > 0 ? row.version : 1,
-      updated_at: row.updated_at,
-      created_at: row.created_at,
-      conversation_id: conversationKnown
-        ? row.claude_conversation_id ?? null
-        : null,
-    })),
-    failed: false,
-  };
+  const rows = raw.map((row) => ({
+    id: row.id,
+    title: row.title,
+    version:
+      typeof row.version === "number" && row.version > 0 ? row.version : 1,
+    updated_at: row.updated_at,
+    created_at: row.created_at,
+    conversation_id: conversationKnown
+      ? row.claude_conversation_id ?? null
+      : null,
+  }));
+
+  // The exact owned-deck total. Only meaningful (and only worth a second query)
+  // when a cap is in force — otherwise the returned rows ARE all of them.
+  let total = rows.length;
+  if (limit) {
+    const countRes = await supabase
+      .from("decks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (typeof countRes.count === "number") total = countRes.count;
+  }
+
+  return { rows, failed: false, total };
 }
 
 // Fetch the stored HTML for one historical version of a deck (for viewing a
@@ -831,7 +849,24 @@ export async function getCommentsForDeck(
     logDbError("comments fetch failed", error);
     return { rows: [], failed: true };
   }
-  return { rows: (data ?? []) as CommentRow[], failed: false };
+  const rows = (data ?? []) as CommentRow[];
+  // Security: `author_email` is sent by the browser at insert time, so a user
+  // could store someone else's address to spoof who a comment is from. Never
+  // display the stored value as-is — re-resolve it from the trustworthy
+  // `user_id` (which RLS forces to equal auth.uid()) via the admin auth API.
+  // Only fall back to the stored snapshot when the lookup returns nothing — i.e.
+  // the author later deleted their account — so a deleted user's comment keeps a
+  // sensible name without letting a live user impersonate anyone.
+  const authorEmails = await getOwnerEmails(
+    rows.map((r) => r.user_id).filter((id): id is string => !!id),
+  );
+  return {
+    rows: rows.map((r) => ({
+      ...r,
+      author_email: authorEmails[r.user_id] ?? r.author_email,
+    })),
+    failed: false,
+  };
 }
 
 // Owner-only curation of a comment: toggle `dismissed` and/or set the owner's
