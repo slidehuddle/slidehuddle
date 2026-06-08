@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { after } from "next/server";
 import SlideViewer from "./SlideViewer";
+import FloatingViewer from "./FloatingViewer";
 import TopNav from "@/components/TopNav";
 import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
 import UpdatedBanner from "./UpdatedBanner";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/slide-store";
 import { computeUpdateBanner, type VersionStamp } from "./version-banner";
 import { describeChange, summarizeDeckChange } from "./deck-diff";
+import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
 export default async function ViewerPage({
@@ -33,10 +35,16 @@ export default async function ViewerPage({
     id?: string;
     source?: string;
     v?: string;
+    view?: string;
   }>;
 }) {
-  const { slides, id, source: sourceParam, v } = await searchParams;
+  const { slides, id, source: sourceParam, v, view } = await searchParams;
   const isCaptureSource = sourceParam === "capture";
+  // Opt-in flag for the new, full-bleed "floating" viewer. Default off: with no
+  // ?view=floating in the URL, the current viewer renders through its existing,
+  // unchanged code path below. (`view` is a separate param from `v`, which is
+  // the version selector — they don't collide.)
+  const useFloatingViewer = view === "floating";
 
   let html = "";
   let source: "param" | "stored" | "sample";
@@ -247,6 +255,42 @@ export default async function ViewerPage({
     ? `/viewer?id=${id}${isCaptureSource ? "&source=capture" : ""}`
     : "/viewer";
   const loginHref = `/login?next=${encodeURIComponent(viewerPath)}`;
+
+  // Gated new viewer. Renders the SAME server-prepared deck HTML full-bleed,
+  // with floating control clusters over it (Phase 1). All the data-fetching and
+  // role-gating above is shared and untouched; we only swap the presentation.
+  // When the flag is off we fall through to the existing viewer unchanged.
+  if (useFloatingViewer) {
+    // Owner-only "Send to AI" prompt, computed from the SAME curated set the
+    // current viewer and the MCP `get_feedback` tool use. Null for non-owners,
+    // read-only (historical) views, and non-stored decks — so the action is
+    // simply absent for everyone who can't curate, matching the current viewer.
+    const floatingFeedbackText =
+      isOwner && !readOnly && viewerDeckId
+        ? buildFeedbackPrompt(
+            selectCuratedFeedback(initialComments, initialFlags, initialStubs),
+          )
+        : null;
+    return (
+      <main className="flex-1 flex min-h-0 overflow-hidden">
+        <FloatingViewer
+          rawHtml={html}
+          deckId={viewerDeckId}
+          deckTitle={deckTitle}
+          currentVersion={currentVersion}
+          viewingVersion={viewingVersion}
+          versions={versionNav}
+          readOnly={readOnly}
+          currentUserId={currentUserId}
+          currentUserEmail={currentUserEmail}
+          isOwner={isOwner}
+          conversationId={conversationId}
+          feedbackText={floatingFeedbackText}
+          loginHref={loginHref}
+        />
+      </main>
+    );
+  }
 
   const centerSlot =
     source === "stored" && id ? (

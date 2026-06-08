@@ -34,7 +34,11 @@ function legacyCopy(text: string): boolean {
 // "Copy link" — a deck action (lives in the thumbnail/actions row, not the
 // identity nav). Copies the current viewer URL with ?source=capture stripped
 // so recipients never inherit the creator-claim flag.
-export default function CopyLinkButton() {
+//
+// `label` defaults to "Copy link" (the current viewer's wording); the new
+// floating viewer passes "Share". Behaviour — copy + toast — is identical
+// either way, so the current viewer is unchanged.
+export default function CopyLinkButton({ label = "Copy link" }: { label?: string } = {}) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -73,7 +77,7 @@ export default function CopyLinkButton() {
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
           </svg>
-          Copy link
+          {label}
         </span>
         <span className={`col-start-1 row-start-1 inline-flex items-center gap-2 ${copied ? "" : "invisible"}`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

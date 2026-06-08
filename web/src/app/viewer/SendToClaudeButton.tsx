@@ -49,6 +49,19 @@ type Props = {
   feedbackText: string | null;
   /** Claude conversation this deck was captured from, or null when unbound. */
   conversationId: string | null;
+  /** Primary-button wording. Defaults to "Send to Claude" (current viewer);
+   *  the floating viewer passes "Send to AI". The action — open the bound
+   *  Claude chat + copy feedback — is identical, so behaviour is unchanged. */
+  label?: string;
+  /** Muted-chip wording shown when there's no feedback. Defaults to the current
+   *  viewer's "No comments for Claude yet"; the floating viewer passes
+   *  "No comments for AI yet". */
+  emptyLabel?: string;
+  /** Shared min-width Tailwind class for both resting states, so the chip and
+   *  the active split button stay the same width. Defaults to the current
+   *  viewer's width; the floating viewer passes a narrower one to fit its
+   *  shorter copy. */
+  minWidthClass?: string;
 };
 
 // The prompt is one header line followed by one line per feedback item
@@ -77,7 +90,13 @@ function Sparkle() {
   );
 }
 
-export default function SendToClaudeButton({ feedbackText, conversationId }: Props) {
+export default function SendToClaudeButton({
+  feedbackText,
+  conversationId,
+  label = "Send to Claude",
+  emptyLabel = "No comments for Claude yet",
+  minWidthClass = ACTION_MIN_W,
+}: Props) {
   const [open, setOpen] = useState(false);
   // Label of the most recent successful copy ("Feedback" / "MCP URL"), or null.
   // One shared confirmation toast covers both dropdown actions.
@@ -94,10 +113,10 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
       <span
         aria-disabled="true"
         title="No comments, requested slides, or flags to send yet"
-        className={`inline-flex items-center justify-center gap-2 rounded-lg bg-[#f0f0f3] text-muted text-sm font-semibold px-3.5 py-2 cursor-not-allowed select-none ${ACTION_MIN_W}`}
+        className={`inline-flex items-center justify-center gap-2 rounded-lg bg-[#f0f0f3] text-muted text-sm font-semibold px-3.5 py-2 cursor-not-allowed select-none ${minWidthClass}`}
       >
         <Sparkle />
-        No comments for Claude yet
+        {emptyLabel}
       </span>
     );
   }
@@ -144,7 +163,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
           single button with a dropdown affordance — not two buttons. */}
       <div
         ref={containerRef}
-        className={`inline-flex items-stretch rounded-lg overflow-hidden border ${ACTION_MIN_W}`}
+        className={`inline-flex items-stretch rounded-lg overflow-hidden border ${minWidthClass}`}
         style={{ borderColor: PURPLE, backgroundColor: "#ffffff" }}
       >
         {/* Primary action — opens the bound Claude conversation. */}
@@ -160,7 +179,7 @@ export default function SendToClaudeButton({ feedbackText, conversationId }: Pro
         >
           <Sparkle />
           <span>
-            Send to Claude
+            {label}
             {/* subtle "· N" count inside the label (muted), not a heavy badge —
                 stays tidy even with double-digit counts */}
             <span
