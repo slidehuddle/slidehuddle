@@ -24,7 +24,6 @@ import {
 } from "@/lib/slide-store";
 import { computeUpdateBanner, type VersionStamp } from "./version-banner";
 import { describeChange, summarizeDeckChange } from "./deck-diff";
-import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
 export default async function ViewerPage({
@@ -261,16 +260,6 @@ export default async function ViewerPage({
   // role-gating above is shared and untouched; we only swap the presentation.
   // When the flag is off we fall through to the existing viewer unchanged.
   if (useFloatingViewer) {
-    // Owner-only "Send to AI" prompt, computed from the SAME curated set the
-    // current viewer and the MCP `get_feedback` tool use. Null for non-owners,
-    // read-only (historical) views, and non-stored decks — so the action is
-    // simply absent for everyone who can't curate, matching the current viewer.
-    const floatingFeedbackText =
-      isOwner && !readOnly && viewerDeckId
-        ? buildFeedbackPrompt(
-            selectCuratedFeedback(initialComments, initialFlags, initialStubs),
-          )
-        : null;
     return (
       <main className="flex-1 flex min-h-0 overflow-hidden">
         <FloatingViewer
@@ -285,7 +274,15 @@ export default async function ViewerPage({
           currentUserEmail={currentUserEmail}
           isOwner={isOwner}
           conversationId={conversationId}
-          feedbackText={floatingFeedbackText}
+          // Comments seed. Loaded server-side only for signed-in viewers (so
+          // anonymous viewers get [] — no comment authors ever reach them).
+          initialComments={initialComments}
+          // Owner-only raw inputs for the live "Send to AI" prompt, recomputed
+          // client-side as the owner curates comments. Flags/stubs carry
+          // collaborator emails, so they're sent ONLY to the owner (who may see
+          // them); everyone else gets empty arrays.
+          initialFlags={isOwner ? initialFlags : []}
+          initialStubs={isOwner ? initialStubs : []}
           loginHref={loginHref}
         />
       </main>

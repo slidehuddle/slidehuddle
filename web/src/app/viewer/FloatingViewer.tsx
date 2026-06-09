@@ -26,7 +26,11 @@ import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-dec
 import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
 import CopyLinkButton from "./CopyLinkButton";
 import SendToClaudeButton from "./SendToClaudeButton";
+import CommentsPanel from "./CommentsPanel";
+import { useDeckComments } from "./useDeckComments";
+import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import AvatarMenu from "@/components/AvatarMenu";
+import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
 
 // ── TUNABLE ──────────────────────────────────────────────────────────────
 // How long (in milliseconds) the controls stay expanded after you stop
@@ -53,8 +57,11 @@ type Props = {
   currentUserEmail: string | null;
   isOwner: boolean;
   conversationId: string | null;
-  /** Owner-only prebuilt "Send to AI" prompt, or null. Computed server-side. */
-  feedbackText: string | null;
+  /** Comments seed for the floating overlay; [] for anonymous viewers. */
+  initialComments: CommentRow[];
+  /** Owner-only raw inputs for the live "Send to AI" prompt; [] otherwise. */
+  initialFlags: FlagRow[];
+  initialStubs: StubRow[];
   loginHref: string;
 };
 
@@ -154,7 +161,9 @@ export default function FloatingViewer({
   currentUserEmail,
   isOwner,
   conversationId,
-  feedbackText,
+  initialComments,
+  initialFlags,
+  initialStubs,
   loginHref,
 }: Props) {
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
@@ -186,6 +195,20 @@ export default function FloatingViewer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [slideCount]);
+
+  // Comments. All the wiring (state, realtime, add/delete/curation) lives in a
+  // hook used ONLY here, so SlideViewer stays untouched. The panel is a floating
+  // overlay (below) — it does not shrink the slide.
+  const { comments, addComment, deleteComment, dismissComment, editComment } =
+    useDeckComments({
+      deckId,
+      currentUserId,
+      currentUserEmail,
+      viewingVersion,
+      readOnly,
+      initialComments,
+    });
+  const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
 
   // ── Reveal / collapse (Phase 2) ──────────────────────────────────────────
   // `expanded` = full controls; otherwise the minimal resting set. We start
@@ -390,6 +413,33 @@ export default function FloatingViewer({
   // sees the slide + navigation only (no comments), matching the requirement.
   const showComments = isStored && !!currentUserId;
 
+  // Comments on the slide currently shown. The floating viewer navigates real
+  // slides only, so the active slide index is simply safeIndex.
+  const currentSlideComments = useMemo(
+    () => comments.filter((c) => c.slide_index === safeIndex),
+    [comments, safeIndex],
+  );
+  const currentSlideCommentCount = currentSlideComments.length;
+
+  // Role gating mirrors the current viewer.
+  const canComment = !!(deckId && currentUserId) && !readOnly;
+  const canCurate = isOwner && !readOnly && !!deckId;
+
+  // Live "Send to AI" prompt — recomputed as the owner curates comments, so the
+  // action reflects dismiss/edit immediately (not just at page load). Owner-only
+  // (null otherwise), built from the SAME selectCuratedFeedback the current
+  // viewer and the MCP `get_feedback` tool use. Flags/stubs are the seeded
+  // owner-only inputs (not editable in this viewer yet).
+  const feedbackText = useMemo(
+    () =>
+      canSendToAI
+        ? buildFeedbackPrompt(
+            selectCuratedFeedback(comments, initialFlags, initialStubs),
+          )
+        : null,
+    [canSendToAI, comments, initialFlags, initialStubs],
+  );
+
   // Shared frosted-pill look for the corner clusters. Fixed height so the two
   // top clusters match; no flex `gap` because spacing is managed per-item (and
   // some items collapse, taking their spacing with them). The clusters' shell
@@ -512,9 +562,18 @@ export default function FloatingViewer({
                 </Collapsible>
 
                 {showComments && (
-                  <Placeholder
-                    title="Comments"
-                    className="gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold shrink-0"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCommentsPanelOpen((o) => !o);
+                      reveal();
+                    }}
+                    aria-pressed={commentsPanelOpen}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold shrink-0 transition-colors ${
+                      commentsPanelOpen
+                        ? "bg-[#0F6E56] text-white"
+                        : "bg-[#E1F5EE] text-[#085041] hover:bg-[#d3f0e6]"
+                    }`}
                   >
                     <svg
                       width="15"
@@ -529,7 +588,19 @@ export default function FloatingViewer({
                       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
                     Comments
-                  </Placeholder>
+                    {currentSlideCommentCount > 0 && (
+                      <span
+                        className="inline-flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1.5 text-[11px] font-bold"
+                        style={
+                          commentsPanelOpen
+                            ? { backgroundColor: "#ffffff", color: "#0F6E56" }
+                            : { backgroundColor: "#0F6E56", color: "#ffffff" }
+                        }
+                      >
+                        {currentSlideCommentCount}
+                      </span>
+                    )}
+                  </button>
                 )}
 
                 <span className={`shrink-0 ${showComments ? "ml-2" : ""}`}>
@@ -566,7 +637,9 @@ export default function FloatingViewer({
             onClick={goNext}
             disabled={safeIndex === slideCount - 1}
             aria-label="Next slide"
-            className="absolute right-4 top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm"
+            className={`absolute top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm ${
+              commentsPanelOpen ? "right-[372px]" : "right-4"
+            }`}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="9 18 15 12 9 6" />
@@ -578,15 +651,18 @@ export default function FloatingViewer({
             {safeIndex + 1} / {slideCount}
           </span>
 
-          {/* Zoom control placeholder, bottom-right (inert for now). */}
-          <Placeholder
-            title="Zoom"
-            className={`absolute bottom-4 right-4 z-20 gap-2 rounded-xl border border-black/[0.06] bg-white/80 px-2.5 py-1.5 text-sm font-semibold shadow-[0_6px_22px_rgba(0,0,0,0.10)] backdrop-blur-md ${bottomFade}`}
-          >
-            <span className="w-4 text-center">&minus;</span>
-            100%
-            <span className="w-4 text-center">+</span>
-          </Placeholder>
+          {/* Zoom control placeholder, bottom-right (inert for now). Hidden while
+              the comments panel is open, since the panel sits over this corner. */}
+          {!commentsPanelOpen && (
+            <Placeholder
+              title="Zoom"
+              className={`absolute bottom-4 right-4 z-20 gap-2 rounded-xl border border-black/[0.06] bg-white/80 px-2.5 py-1.5 text-sm font-semibold shadow-[0_6px_22px_rgba(0,0,0,0.10)] backdrop-blur-md ${bottomFade}`}
+            >
+              <span className="w-4 text-center">&minus;</span>
+              100%
+              <span className="w-4 text-center">+</span>
+            </Placeholder>
+          )}
 
           {/* Pin / keep-visible toggle, bottom-left. When pinned, the controls
               never fade (it counts as "held open"), so the pin stays reachable
@@ -629,6 +705,40 @@ export default function FloatingViewer({
               }`}
             >
               These controls tuck away while you read — move your cursor to the top to bring them back.
+            </div>
+          )}
+
+          {/* Comments — a FLOATING overlay over the right of the slide. The slide
+              stays full size behind it (it does not shrink). role="dialog" +
+              data-floating-control make the existing isHeldOpen() guard treat the
+              open panel as "held", so the controls don't collapse while it's open;
+              the panel itself is not tied to `expanded`, so it never fades. It
+              reuses the existing CommentsPanel — only its positioning changes from
+              a docked sidebar to this overlay. */}
+          {commentsPanelOpen && showComments && (
+            <div
+              role="dialog"
+              aria-label={`Comments on slide ${safeIndex + 1}`}
+              data-floating-control
+              className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+            >
+              <CommentsPanel
+                slideLabel={safeIndex + 1}
+                isStub={false}
+                flag={null}
+                comments={currentSlideComments}
+                canComment={canComment}
+                canCurate={canCurate}
+                readOnly={readOnly}
+                currentUserId={currentUserId}
+                loginHref={loginHref}
+                onAdd={(body) => addComment(safeIndex, body)}
+                onDelete={deleteComment}
+                onDismiss={dismissComment}
+                onEdit={editComment}
+                onFlagDismiss={async () => {}}
+                onClose={() => setCommentsPanelOpen(false)}
+              />
             </div>
           )}
         </>

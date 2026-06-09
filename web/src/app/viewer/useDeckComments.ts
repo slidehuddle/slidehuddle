@@ -1,0 +1,197 @@
+"use client";
+
+// Comment state + realtime + write handlers for the FLOATING viewer only.
+// This deliberately replicates the comment wiring that lives inside
+// SlideViewer.tsx (rather than extracting a shared hook), so SlideViewer — the
+// live viewer — stays completely untouched. It reuses the SAME building blocks:
+// the browser Supabase client for insert/delete (RLS enforced by the user's
+// session), the `setCommentCurationAction` server action for owner curation
+// (ownership enforced server-side), and the same Realtime channel pattern.
+// The Phase-7 cutover removes this duplication when the old viewer is retired.
+
+import { useEffect, useState } from "react";
+import { setCommentCurationAction } from "./actions";
+import type { CommentRow } from "@/lib/slide-store";
+
+type Params = {
+  deckId: string | null;
+  currentUserId: string | null;
+  currentUserEmail: string | null;
+  /** Version being viewed — new comments are stamped with it, and inserts from
+   *  realtime are filtered to it (matches how the server seeded them). */
+  viewingVersion: number;
+  /** Historical (read-only) view: no realtime, no writes. */
+  readOnly: boolean;
+  initialComments: CommentRow[];
+};
+
+const COMMENT_COLS =
+  "id, deck_id, user_id, author_email, slide_index, body, created_at, version, dismissed, owner_edited_body";
+
+export function useDeckComments({
+  deckId,
+  currentUserId,
+  currentUserEmail,
+  viewingVersion,
+  readOnly,
+  initialComments,
+}: Params) {
+  const [comments, setComments] = useState<CommentRow[]>(initialComments);
+
+  // Live sync: subscribe to this deck's comment changes so a teammate's
+  // add/edit/dismiss/delete shows up without a refresh. Current deck only
+  // (historical versions are immutable). Realtime respects RLS via the user's
+  // session; inserts are filtered to the version being viewed.
+  useEffect(() => {
+    if (!deckId || readOnly) return;
+    let cancelled = false;
+    let cleanup = () => {};
+    (async () => {
+      const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+      const supabase = getSupabaseBrowser();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (cancelled) return;
+      // Authorize Realtime with the user's token so RLS applies.
+      if (session) supabase.realtime.setAuth(session.access_token);
+      const filter = `deck_id=eq.${deckId}`;
+      const channel = supabase
+        .channel(`floating-deck-${deckId}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "comments", filter },
+          (payload) => {
+            const row = payload.new as CommentRow;
+            if (row.version !== viewingVersion) return;
+            setComments((prev) =>
+              prev.some((c) => c.id === row.id) ? prev : [...prev, row],
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "comments", filter },
+          (payload) => {
+            const row = payload.new as CommentRow;
+            setComments((prev) =>
+              prev.map((c) => (c.id === row.id ? { ...c, ...row } : c)),
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "comments", filter },
+          (payload) => {
+            const oldRow = payload.old as { id?: string };
+            if (!oldRow?.id) return;
+            setComments((prev) => prev.filter((c) => c.id !== oldRow.id));
+          },
+        )
+        .subscribe();
+      cleanup = () => {
+        supabase.removeChannel(channel);
+      };
+    })();
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, [deckId, readOnly, viewingVersion]);
+
+  // Add a comment to a given slide (optimistic; reconciled on save).
+  async function addComment(slideIndex: number, body: string) {
+    if (!deckId || !currentUserId) return;
+    const optimisticId = `temp-${Date.now()}`;
+    const optimistic: CommentRow = {
+      id: optimisticId,
+      deck_id: deckId,
+      user_id: currentUserId,
+      author_email: currentUserEmail,
+      slide_index: slideIndex,
+      body,
+      created_at: new Date().toISOString(),
+      version: viewingVersion,
+      dismissed: false,
+      owner_edited_body: null,
+    };
+    setComments((prev) => [...prev, optimistic]);
+    const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+    const supabase = getSupabaseBrowser();
+    const { data, error } = await supabase
+      .from("comments")
+      .insert({
+        deck_id: deckId,
+        user_id: currentUserId,
+        author_email: currentUserEmail,
+        slide_index: slideIndex,
+        body,
+        version: viewingVersion,
+      })
+      .select(COMMENT_COLS)
+      .single();
+    if (error) {
+      console.error("[useDeckComments] comment insert failed:", error);
+      setComments((prev) => prev.filter((c) => c.id !== optimisticId));
+      return;
+    }
+    // Swap the optimistic row for the saved one; dedupe in case the Realtime
+    // INSERT for this same row already echoed back.
+    setComments((prev) => {
+      const real = data as CommentRow;
+      const withoutTemp = prev.filter((c) => c.id !== optimisticId);
+      return withoutTemp.some((c) => c.id === real.id)
+        ? withoutTemp
+        : [...withoutTemp, real];
+    });
+  }
+
+  // Delete a comment (author only — enforced by RLS). Optimistic with revert.
+  async function deleteComment(id: string) {
+    const snapshot = comments;
+    setComments((prev) => prev.filter((c) => c.id !== id));
+    const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
+    const supabase = getSupabaseBrowser();
+    const { error } = await supabase.from("comments").delete().eq("id", id);
+    if (error) {
+      console.error("[useDeckComments] comment delete failed:", error);
+      setComments(snapshot);
+    }
+  }
+
+  // Owner-only: dismiss/restore a comment (exclude from the AI prompt). The
+  // owner check happens server-side in the action; revert on failure.
+  async function dismissComment(id: string, dismissed: boolean) {
+    if (!deckId) return;
+    const snapshot = comments;
+    setComments((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, dismissed } : c)),
+    );
+    const res = await setCommentCurationAction(deckId, id, { dismissed });
+    if (!res.ok) {
+      console.error("[useDeckComments] comment dismiss failed:", res.error);
+      setComments(snapshot);
+    }
+  }
+
+  // Owner-only: set/clear the owner-edited text sent to the AI. The author's
+  // original `body` is never mutated. Server action enforces ownership.
+  async function editComment(id: string, ownerEditedBody: string | null) {
+    if (!deckId) return;
+    const snapshot = comments;
+    setComments((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, owner_edited_body: ownerEditedBody } : c,
+      ),
+    );
+    const res = await setCommentCurationAction(deckId, id, {
+      owner_edited_body: ownerEditedBody,
+    });
+    if (!res.ok) {
+      console.error("[useDeckComments] comment edit failed:", res.error);
+      setComments(snapshot);
+    }
+  }
+
+  return { comments, addComment, deleteComment, dismissComment, editComment };
+}
