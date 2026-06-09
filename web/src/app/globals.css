@@ -37,6 +37,28 @@ body {
   display: none; /* Chrome / Safari */
 }
 
+/* Thin, unobtrusive scrollbar (used by the floating viewer's vertical thumbnail
+   strip). Pair with `dir="rtl"` on the scroll container to move the bar to the
+   left, and `dir="ltr"` on the inner content to keep it laid out normally.
+   NOTE: we intentionally do NOT set the standard `scrollbar-width` — in Chrome
+   that property takes precedence over and disables the `::-webkit-scrollbar`
+   sizing, leaving a chunky ~12px bar. Using only the webkit pseudo gives a
+   true 6px bar in Chromium browsers. */
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 9999px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.32);
+}
+
 /* Comments panel enter animation (a gentle slide-in from the right).
    Deliberately a SMALL offset and a non-zero start opacity: the panel is a
    flex sibling that's always in the layout, so even if this animation never

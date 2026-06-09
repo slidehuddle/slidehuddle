@@ -277,12 +277,13 @@ export default async function ViewerPage({
           // Comments seed. Loaded server-side only for signed-in viewers (so
           // anonymous viewers get [] — no comment authors ever reach them).
           initialComments={initialComments}
-          // Owner-only raw inputs for the live "Send to AI" prompt, recomputed
-          // client-side as the owner curates comments. Flags/stubs carry
-          // collaborator emails, so they're sent ONLY to the owner (who may see
-          // them); everyone else gets empty arrays.
+          // Requested slides shown in the strip + navigation for ALL viewers —
+          // email-redacted for anonymous viewers, same as the current viewer.
+          initialStubs={viewerStubs}
+          // Removal flags are not shown in the floating viewer; they're only an
+          // input to the owner-only "Send to AI" prompt, so send them to the
+          // owner alone (others get []).
           initialFlags={isOwner ? initialFlags : []}
-          initialStubs={isOwner ? initialStubs : []}
           loginHref={loginHref}
         />
       </main>

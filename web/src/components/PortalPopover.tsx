@@ -40,6 +40,7 @@ export default function PortalPopover<T extends HTMLElement>({
       setPos(null);
       return;
     }
+    let raf = 0;
     function update() {
       const a = anchorRef.current;
       if (!a) return;
@@ -51,14 +52,26 @@ export default function PortalPopover<T extends HTMLElement>({
           : r.left + r.width / 2 - width / 2;
       // keep within the viewport horizontally
       left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-      const top = r.bottom + gap;
+      // Default: open below the anchor. Flip ABOVE when the panel wouldn't fit
+      // below but does fit above — so a popover near the bottom edge (e.g. the
+      // "request a slide" form on a low thumbnail) stays fully on-screen. The
+      // panel is in the DOM (visibility:hidden until positioned), so its height
+      // is measurable on the first pass — no flicker.
+      const h = popRef.current?.offsetHeight ?? 0;
+      const belowTop = r.bottom + gap;
+      const flipUp =
+        h > 0 && belowTop + h > window.innerHeight - 8 && r.top - gap - h >= 8;
+      const top = flipUp ? r.top - gap - h : belowTop;
       setPos({ top, left });
     }
     update();
+    // Re-measure after mount in case the panel's height settles a frame later.
+    raf = requestAnimationFrame(update);
     window.addEventListener("resize", update);
     // capture phase so we catch scrolls on the strip's inner scroll container
     window.addEventListener("scroll", update, true);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };

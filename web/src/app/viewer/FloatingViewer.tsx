@@ -27,7 +27,11 @@ import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
 import CopyLinkButton from "./CopyLinkButton";
 import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
+import StubSlideView from "./StubSlideView";
+import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
 import { useDeckComments } from "./useDeckComments";
+import { useDeckStubs } from "./useDeckStubs";
+import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import AvatarMenu from "@/components/AvatarMenu";
 import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
@@ -175,30 +179,18 @@ export default function FloatingViewer({
     setDeck(parseDeck(rawHtml));
   }, [rawHtml]);
 
-  // Navigation over the deck's real slides. (Requested-slide "stubs" are part of
-  // the collaboration layer, wired in a later phase along with comments.)
   const [activeIndex, setActiveIndex] = useState(0);
   const slideCount = deck.slides.length;
-  const hasSlides = slideCount > 0;
-  const safeIndex = Math.min(activeIndex, Math.max(0, slideCount - 1));
-  const currentSlideHtml = hasSlides ? deck.slides[safeIndex] : "";
 
-  const goPrev = () => setActiveIndex((i) => Math.max(0, i - 1));
-  const goNext = () => setActiveIndex((i) => Math.min(slideCount - 1, i + 1));
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "ArrowLeft") setActiveIndex((i) => Math.max(0, i - 1));
-      if (e.key === "ArrowRight")
-        setActiveIndex((i) => Math.min(slideCount - 1, i + 1));
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [slideCount]);
-
-  // Comments. All the wiring (state, realtime, add/delete/curation) lives in a
-  // hook used ONLY here, so SlideViewer stays untouched. The panel is a floating
-  // overlay (below) — it does not shrink the slide.
+  // Requested slides ("stubs") + comments — both wired via hooks used ONLY here,
+  // so SlideViewer stays untouched.
+  const { stubs, insertStub, deleteStub, dismissStub, editStub } = useDeckStubs({
+    deckId,
+    currentUserId,
+    currentUserEmail,
+    readOnly,
+    initialStubs,
+  });
   const { comments, addComment, deleteComment, dismissComment, editComment } =
     useDeckComments({
       deckId,
@@ -209,6 +201,50 @@ export default function FloatingViewer({
       initialComments,
     });
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
+  const [stripOpen, setStripOpen] = useState(false);
+
+  // Merge the real slides and the requested slides into one ordered, navigable
+  // list (real slide indices stay stable, so comment slide_index values do too).
+  const displayItems = useMemo(
+    () => buildDisplayItems(slideCount, stubs),
+    [slideCount, stubs],
+  );
+  const itemCount = displayItems.length;
+  const hasItems = itemCount > 0;
+  const safeIndex = Math.min(activeIndex, Math.max(0, itemCount - 1));
+  const activeItem = hasItems ? displayItems[safeIndex] : null;
+  const activeSlideIndex =
+    activeItem?.kind === "slide" ? activeItem.slideIndex : null;
+  const activeStub = activeItem?.kind === "stub" ? activeItem.stub : null;
+  const currentSlideHtml =
+    activeSlideIndex !== null ? deck.slides[activeSlideIndex] : "";
+
+  const goPrev = () => setActiveIndex((i) => Math.max(0, i - 1));
+  const goNext = () => setActiveIndex((i) => Math.min(itemCount - 1, i + 1));
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "ArrowLeft") setActiveIndex((i) => Math.max(0, i - 1));
+      if (e.key === "ArrowRight")
+        setActiveIndex((i) => Math.min(itemCount - 1, i + 1));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [itemCount]);
+
+  // Jump to a freshly-inserted requested slide once it appears in the list.
+  const [focusStubId, setFocusStubId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusStubId) return;
+    const idx = displayItems.findIndex(
+      (it) => it.kind === "stub" && it.stub.id === focusStubId,
+    );
+    if (idx >= 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveIndex(idx);
+      setFocusStubId(null);
+    }
+  }, [focusStubId, displayItems]);
 
   // ── Reveal / collapse (Phase 2) ──────────────────────────────────────────
   // `expanded` = full controls; otherwise the minimal resting set. We start
@@ -227,14 +263,24 @@ export default function FloatingViewer({
 
   // Read "should stay open" straight from the live DOM, so there's no extra
   // state to keep in sync: an open PortalPopover renders role="dialog"/"menu";
-  // hovered/focused controls are tagged data-floating-control.
+  // hovered/focused controls are tagged data-floating-control. Note: an open
+  // panel (comments / thumbnail strip) does NOT by itself hold the controls
+  // expanded — the clusters still collapse when idle, while the panels stay
+  // (they render independently of `expanded`). Hovering/focusing a panel still
+  // holds, because the panel carries data-floating-control.
   const isHeldOpen = useCallback(() => {
     if (pinnedRef.current) return true;
     if (typeof document === "undefined") return false;
+    // A transient popover/menu is open (version, avatar, send-to-AI, insert).
     if (document.querySelector('[role="dialog"], [role="menu"]')) return true;
+    // A control is hovered (cluster controls only — the side panels deliberately
+    // aren't data-floating-control, so hovering them lets the clusters collapse).
     if (document.querySelector("[data-floating-control]:hover")) return true;
-    const ae = document.activeElement as HTMLElement | null;
-    if (ae && ae.closest && ae.closest("[data-floating-control]")) return true;
+    // A control has KEYBOARD focus (:focus-visible) — so Tab-navigation keeps the
+    // controls up, but a mouse click (which focuses without :focus-visible) does
+    // NOT pin them open.
+    if (document.querySelector("[data-floating-control]:focus-visible"))
+      return true;
     return false;
   }, []);
 
@@ -393,7 +439,7 @@ export default function FloatingViewer({
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", measure);
     };
-  }, [effectiveW, effectiveH, hasSlides]);
+  }, [effectiveW, effectiveH, hasItems]);
 
   const srcDoc = useMemo(
     () =>
@@ -413,31 +459,40 @@ export default function FloatingViewer({
   // sees the slide + navigation only (no comments), matching the requirement.
   const showComments = isStored && !!currentUserId;
 
-  // Comments on the slide currently shown. The floating viewer navigates real
-  // slides only, so the active slide index is simply safeIndex.
+  // Comments on the slide currently shown. When the active item is a requested
+  // slide (a stub), there are none — comments only attach to real slides.
   const currentSlideComments = useMemo(
-    () => comments.filter((c) => c.slide_index === safeIndex),
-    [comments, safeIndex],
+    () =>
+      activeSlideIndex === null
+        ? []
+        : comments.filter((c) => c.slide_index === activeSlideIndex),
+    [comments, activeSlideIndex],
   );
   const currentSlideCommentCount = currentSlideComments.length;
+
+  // real slide index → comment count, for the thumbnail badges.
+  const commentCountBySlide = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const c of comments)
+      m.set(c.slide_index, (m.get(c.slide_index) ?? 0) + 1);
+    return m;
+  }, [comments]);
 
   // Role gating mirrors the current viewer.
   const canComment = !!(deckId && currentUserId) && !readOnly;
   const canCurate = isOwner && !readOnly && !!deckId;
 
-  // Live "Send to AI" prompt — recomputed as the owner curates comments, so the
-  // action reflects dismiss/edit immediately (not just at page load). Owner-only
+  // Live "Send to AI" prompt — recomputed as the owner curates comments AND
+  // requested slides, so the action reflects dismiss/edit immediately. Owner-only
   // (null otherwise), built from the SAME selectCuratedFeedback the current
-  // viewer and the MCP `get_feedback` tool use. Flags/stubs are the seeded
-  // owner-only inputs (not editable in this viewer yet).
+  // viewer and the MCP `get_feedback` tool use. Flags are the seeded owner-only
+  // input (removal flags aren't editable in this viewer).
   const feedbackText = useMemo(
     () =>
       canSendToAI
-        ? buildFeedbackPrompt(
-            selectCuratedFeedback(comments, initialFlags, initialStubs),
-          )
+        ? buildFeedbackPrompt(selectCuratedFeedback(comments, initialFlags, stubs))
         : null,
-    [canSendToAI, comments, initialFlags, initialStubs],
+    [canSendToAI, comments, initialFlags, stubs],
   );
 
   // Shared frosted-pill look for the corner clusters. Fixed height so the two
@@ -460,32 +515,53 @@ export default function FloatingViewer({
       ref={stageRef}
       className="relative flex-1 min-w-0 min-h-0 flex items-center justify-center bg-[#f6f6fa] overflow-hidden"
     >
-      {!hasSlides ? (
+      {!hasItems ? (
         <p className="text-muted">No slides to display.</p>
       ) : (
         <>
-          {/* The slide, contained/letterboxed within the full-bleed stage. */}
-          <div
-            className="relative bg-white overflow-hidden"
-            style={{
-              width: cardSize.width ? `${cardSize.width}px` : undefined,
-              height: cardSize.height ? `${cardSize.height}px` : undefined,
-            }}
-          >
-            <iframe
-              key={`display-${safeIndex}`}
-              title={`Slide ${safeIndex + 1}`}
-              srcDoc={srcDoc}
-              sandbox="allow-scripts"
-              className="border-0 block bg-white absolute top-1/2 left-1/2"
+          {/* The active item — a real slide (sandboxed iframe) or a requested
+              slide ("stub") card — contained/letterboxed within the stage. The
+              stub card is sized to the same contained box as the slides. */}
+          {activeStub !== null ? (
+            <div
               style={{
-                width: `${effectiveW}px`,
-                height: `${effectiveH}px`,
-                transform: `translate(-50%, -50%) scale(${scale})`,
-                transformOrigin: "center center",
+                width: cardSize.width ? `${cardSize.width}px` : undefined,
+                height: cardSize.height ? `${cardSize.height}px` : undefined,
               }}
-            />
-          </div>
+            >
+              <StubSlideView
+                stub={activeStub}
+                currentUserId={currentUserId}
+                isOwner={isOwner}
+                canCurate={canCurate}
+                onDelete={deleteStub}
+                onDismiss={dismissStub}
+                onEdit={editStub}
+              />
+            </div>
+          ) : (
+            <div
+              className="relative bg-white overflow-hidden"
+              style={{
+                width: cardSize.width ? `${cardSize.width}px` : undefined,
+                height: cardSize.height ? `${cardSize.height}px` : undefined,
+              }}
+            >
+              <iframe
+                key={`display-${safeIndex}`}
+                title={`Slide ${safeIndex + 1}`}
+                srcDoc={srcDoc}
+                sandbox="allow-scripts"
+                className="border-0 block bg-white absolute top-1/2 left-1/2"
+                style={{
+                  width: `${effectiveW}px`,
+                  height: `${effectiveH}px`,
+                  transform: `translate(-50%, -50%) scale(${scale})`,
+                  transformOrigin: "center center",
+                }}
+              />
+            </div>
+          )}
 
           {/* TOP-LEFT — deck zone. Logo + slides toggle persist; the divider,
               deck title and version chip collapse away at rest. */}
@@ -505,12 +581,24 @@ export default function FloatingViewer({
                   aria-hidden="true"
                   className="mx-1.5 h-5 w-px bg-black/10 shrink-0"
                 />
-                <Placeholder
-                  title="Slides strip"
-                  className="h-[30px] w-[30px] rounded-lg shrink-0"
+                <button
+                  type="button"
+                  data-floating-control
+                  onClick={() => {
+                    setStripOpen((o) => !o);
+                    reveal();
+                  }}
+                  aria-pressed={stripOpen}
+                  aria-label="Toggle the slides list"
+                  title="Slides"
+                  className={`h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center transition-colors ${
+                    stripOpen
+                      ? "bg-[#4A3FB5] text-white"
+                      : "text-[#6b6b75] hover:bg-black/[0.05]"
+                  }`}
                 >
                   <SlidesStripIcon />
-                </Placeholder>
+                </button>
                 <Collapsible expanded={expanded} reducedMotion={reducedMotion}>
                   <span
                     aria-hidden="true"
@@ -561,7 +649,7 @@ export default function FloatingViewer({
                   </span>
                 </Collapsible>
 
-                {showComments && (
+                {showComments && activeSlideIndex !== null && (
                   <button
                     type="button"
                     onClick={() => {
@@ -619,36 +707,40 @@ export default function FloatingViewer({
             )}
           </div>
 
-          {/* Side navigation arrows. These sit in the side margins, NOT over the
-              slide content, so they stay visible (they don't join the fade). */}
-          <button
-            type="button"
-            onClick={goPrev}
-            disabled={safeIndex === 0}
-            aria-label="Previous slide"
-            className="absolute left-4 top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={goNext}
-            disabled={safeIndex === slideCount - 1}
-            aria-label="Next slide"
-            className={`absolute top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm ${
-              commentsPanelOpen ? "right-[372px]" : "right-4"
-            }`}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
+          {/* Side navigation arrows. They sit in the side margins; each simply
+              hides when its side's panel is open (left arrow under the thumbnail
+              strip, right arrow under the comments panel). */}
+          {!stripOpen && (
+            <button
+              type="button"
+              onClick={goPrev}
+              disabled={safeIndex === 0}
+              aria-label="Previous slide"
+              className="absolute left-4 top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+          )}
+          {!commentsPanelOpen && (
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={safeIndex === itemCount - 1}
+              aria-label="Next slide"
+              className="absolute right-4 top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          )}
 
           {/* Counter pill, bottom-center. */}
           <span className={`absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/55 text-white text-xs font-medium px-3 py-1 tabular-nums select-none ${bottomFade}`}>
-            {safeIndex + 1} / {slideCount}
+            {safeIndex + 1} / {itemCount}
+            {activeStub !== null ? " · requested slide" : ""}
           </span>
 
           {/* Zoom control placeholder, bottom-right (inert for now). Hidden while
@@ -715,11 +807,14 @@ export default function FloatingViewer({
               the panel itself is not tied to `expanded`, so it never fades. It
               reuses the existing CommentsPanel — only its positioning changes from
               a docked sidebar to this overlay. */}
-          {commentsPanelOpen && showComments && (
+          {commentsPanelOpen && showComments && activeSlideIndex !== null && (
+            // role="complementary" (a persistent side panel), NOT role="dialog"
+            // — and no data-floating-control — so it does NOT hold the controls
+            // expanded. The clusters still collapse on idle while this panel
+            // stays open (it renders on commentsPanelOpen, independent of fade).
             <div
-              role="dialog"
+              role="complementary"
               aria-label={`Comments on slide ${safeIndex + 1}`}
-              data-floating-control
               className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
             >
               <CommentsPanel
@@ -732,13 +827,55 @@ export default function FloatingViewer({
                 readOnly={readOnly}
                 currentUserId={currentUserId}
                 loginHref={loginHref}
-                onAdd={(body) => addComment(safeIndex, body)}
+                onAdd={(body) =>
+                  activeSlideIndex !== null
+                    ? addComment(activeSlideIndex, body)
+                    : Promise.resolve()
+                }
                 onDelete={deleteComment}
                 onDismiss={dismissComment}
                 onEdit={editComment}
                 onFlagDismiss={async () => {}}
                 onClose={() => setCommentsPanelOpen(false)}
               />
+            </div>
+          )}
+
+          {/* Thumbnail strip — a FLOATING vertical panel on the LEFT (opposite
+              the comments panel). Lists real + requested slides with a "+" to
+              request one. Toggled by the slides button; the slide stays full size
+              behind it. data-floating-control + the open-panel guard keep the
+              controls expanded while it's open. */}
+          {stripOpen && deckId && (
+            // Persistent side panel (no data-floating-control), so it does not
+            // hold the controls expanded — the clusters still collapse on idle
+            // while the strip stays. Width matches the collapsed top-left
+            // cluster so they line up as one left column. The inner scroller is
+            // dir="rtl" (thin scrollbar on the left) with a small left margin so
+            // the bar sits just inside the rounded corner; the content is ltr.
+            <div
+              aria-label="Slides"
+              className="absolute top-[84px] left-4 bottom-4 z-30 w-[185px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+            >
+              <div
+                dir="rtl"
+                className="thin-scrollbar absolute inset-y-2 left-1 right-0 overflow-y-auto overflow-x-hidden"
+              >
+                <FloatingThumbnailStrip
+                  deck={deck}
+                  items={displayItems}
+                  activeIndex={safeIndex}
+                  onSelect={setActiveIndex}
+                  commentCountBySlide={commentCountBySlide}
+                  showInsert={isStored && !readOnly}
+                  canInsert={canComment}
+                  loginHref={loginHref}
+                  onInsertStub={async (position, fields) => {
+                    const id = await insertStub(position, fields);
+                    if (id) setFocusStubId(id);
+                  }}
+                />
+              </div>
             </div>
           )}
         </>
