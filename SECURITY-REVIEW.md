@@ -125,6 +125,12 @@ lean on RLS). ✅
   reasons, owner-edited text) is rendered as React children — **React escapes
   these automatically**, and there is **no `dangerouslySetInnerHTML` anywhere** in
   the app. So none of it can inject script into a SlideHuddle page. ✅
+- The gated **floating viewer** redesign (`?view=floating`,
+  [FloatingViewer.tsx](web/src/app/viewer/FloatingViewer.tsx)) renders slides into
+  the **same** `sandbox="allow-scripts"` iframe with the same untrusted-message
+  handling, reuses the same server-prepared/role-gated/email-redacted data, and
+  escapes all user text as React children — it adds no new HTML-rendering surface.
+  See `docs/architecture.md` → "Floating viewer (gated redesign)". ✅
 
 ## 5. Authentication & sessions — PASS
 

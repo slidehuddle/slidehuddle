@@ -356,6 +356,110 @@ A few extra notes:
   on the card. Total-comment counts (irrespective of read state) are
   shown alongside.
 
+## Floating viewer (gated redesign)
+
+A from-scratch redesign of the deck viewer, built **alongside** the current one
+rather than replacing it. It's reached only by adding `?view=floating` to a
+viewer URL (e.g. `/viewer?id=…&view=floating`) and is **off by default**, so
+shipping it changes nothing for existing users until the flag is flipped.
+(`view` is a separate query param from `v`, which selects a deck *version* —
+they don't collide.)
+
+**Why a parallel viewer.** The live viewer (`SlideViewer.tsx`) is in daily use,
+so the redesign is a separate component that can be turned on per-URL and proven
+before any cutover. `page.tsx` does all the data-fetching and role-gating once,
+then branches at the very end: with the flag on it renders `<FloatingViewer>`
+full-bleed; otherwise it falls through to the existing `<SlideViewer>` path,
+byte-for-byte unchanged.
+
+**Hard guardrails held throughout the build:**
+
+- **`SlideViewer.tsx` is never edited.** The floating viewer reuses the *pure*
+  building blocks (`parseDeck`/`buildSrcdoc`, `display-items`, `CommentsPanel`,
+  `StubSlideView`, `InsertStubForm`, `DeckVersionNav`, `AvatarMenu`) and the same
+  server actions, but its own orchestration lives in `FloatingViewer.tsx`.
+- **Same data, same RLS, same gating.** It receives the same server-prepared
+  props from `page.tsx` (`getCommentsForDeck`/`getStubsForDeck` seeds, the same
+  email redaction, the same `isOwner`/`currentUserId` flags). No new endpoints,
+  no loosened RLS. Anonymous viewers see slides + navigation + requested slides
+  (email-redacted) but no comments/curation — exactly like the current viewer.
+- **Same sandbox.** The slide still renders in `<iframe sandbox="allow-scripts">`
+  (never `allow-same-origin`); no `dangerouslySetInnerHTML`; all user text
+  renders as escaped React children.
+- **Shared components only gain ADDITIVE props.** `CopyLinkButton` (a `label`,
+  default "Copy link") and `SendToClaudeButton` (`label`/`emptyLabel`/
+  `minWidthClass`) got optional props that default to current behaviour, so the
+  live viewer is unaffected.
+
+**The "replicate, don't extract" decision (the hooks).** The comment and
+requested-slide state / realtime / write logic lives *inside* `SlideViewer.tsx`.
+To reuse it without touching that file, the floating viewer's wiring is
+replicated in two hooks used **only** by it — `useDeckComments` and
+`useDeckStubs` — built from the same browser-client writes and the same server
+actions (`setCommentCurationAction`, `deleteStub`/`editStubFields`/
+`setStubCuration`). This trades a little duplication for zero regression risk to
+the live viewer; the planned Phase-7 cutover (retire the old viewer) folds the
+duplication back together.
+
+### What it does, by phase
+
+- **Phase 0 — gated full-bleed slide.** The flag renders the current slide edge
+  to edge, nothing else.
+- **Phase 1 — floating control clusters.** Small frosted clusters tucked into
+  the corners over the full-bleed slide: top-left = logo+name → dashboard, slides
+  toggle, deck title, version chip + history; top-right = avatar / Sign in,
+  **Send to AI** (the live `SendToClaudeButton`, relabelled), **Comments**,
+  **Share** (the live `CopyLinkButton`, relabelled). Side arrows, a counter pill,
+  a pin toggle. (Send-to-AI was made *live* here rather than a placeholder.)
+- **Phase 2 — collapse-to-minimal + reveal-from-top.** At rest the controls
+  collapse to a minimal set (logo + slides toggle, Comments + Share, the arrows);
+  everything else tucks away after `IDLE_FADE_MS` (6 s). They re-expand when the
+  cursor comes within `TOP_REVEAL_PX` (90 px) of the top, or on keyboard focus.
+  **Detection is parent-side only** — there is deliberately **no overlay over the
+  slide**, so its centre stays selectable for a future anchored-comments feature;
+  collapsed controls are `pointer-events: none`. (An earlier approach injected an
+  "activity" reporter into the slide iframe via `postMessage` to catch movement
+  *over* the slide; it was reverted in favour of top-only reveal, so
+  `parse-deck.ts` stays untouched.) The horizontal collapse uses a CSS grid
+  `1fr → 0fr` trick with an `overflow-hidden` inner cell so styled buttons clip
+  cleanly to zero. Respects `prefers-reduced-motion`; a one-time hint (localStorage
+  `sh-floating-hint-seen`) explains the auto-hide.
+- **Phase 3 — comments as a floating overlay.** The Comments control opens
+  `CommentsPanel` as an **overlay** floating over the right of the slide — the
+  slide **stays full size** (the current viewer docks it as a flex sibling that
+  *shrinks* the slide; that's the thing being fixed). Wired via `useDeckComments`.
+- **Phase 4 — requested slides + vertical thumbnail strip.** The slides toggle
+  opens a floating **vertical** thumbnail strip on the **left** (opposite the
+  comments panel). Requested ("stub") slides rejoin the navigation via
+  `buildDisplayItems` (the counter includes them again), with a **"+"** between
+  every slide to request one; landing on a stub shows `StubSlideView`. Wired via
+  `useDeckStubs`. `PortalPopover` gained an **additive flip-up** so the
+  request-a-slide form opens *above* its "+" when there's no room below
+  (top-anchored popovers are unaffected). Strip details: numbers sit just outside
+  each tile; a thin **6 px** scrollbar on the **left** (achieved with
+  `::-webkit-scrollbar` *only* — setting the standard `scrollbar-width` makes
+  Chrome ignore it and fall back to a chunky ~12 px bar), inset from the rounded
+  corners; the strip's width matches the collapsed top-left cluster so they line
+  up as one column.
+
+### The fade ↔ panel rule (a subtle one)
+
+Open side panels must **not** pin the controls expanded — the clusters still
+collapse on idle while the panels stay. So the panels are **not**
+`data-floating-control`, the comments panel is `role="complementary"` (not
+`dialog`, which is reserved for the transient popovers the collapse-guard
+*should* hold under), and the focus-hold is keyboard-only (`:focus-visible`) so
+a *mouse* click on a control doesn't pin it. Each side arrow simply hides when
+its side's panel covers it. The panels render on their own open-state,
+independent of the collapse, so they persist while the chrome fades.
+
+### Still to do
+
+The **zoom** control is still an inert placeholder, and a **mobile** layout
+(docking the cluster elements into top/bottom bars in the letterbox bands) is a
+later phase. The eventual **Phase-7 cutover** retires `SlideViewer.tsx` and folds
+the duplicated hooks back together.
+
 ## The `?next=` redirect for "sign in and come back"
 
 When the viewer's nav "Sign in" link sends an unsigned-in user to `/login`,
@@ -390,6 +494,7 @@ an open-redirect attack via a crafted magic-link URL.
 | HTTP-only session cookies | The `sb-*` auth cookies aren't readable from JavaScript, so an XSS bug on a SlideHuddle page can't steal the session. |
 | Magic-link sign-in | No passwords stored anywhere on our side. The link is one-time and short-lived, and the only way to receive it is to control the email inbox. |
 | `<iframe sandbox="allow-scripts">` in viewer | The viewer renders each slide into an iframe with `sandbox="allow-scripts"` (no `allow-same-origin`). Claude's HTML can run its layout / animation scripts inside an opaque origin — scripts can do whatever they want inside the iframe but can't reach `slidehuddleapp.vercel.app` cookies, storage, or DOM. Same pattern used by CodePen / JSFiddle / etc. **Critical: never add `allow-same-origin`** — the combination `allow-scripts + allow-same-origin` on user-supplied HTML is an XSS vector against this domain. To discover the deck's natural canvas size, we inject a small measurement script at the end of each slide's HTML; that script runs *inside* the sandboxed iframe and posts the actual rendered dimensions back to the parent via cross-origin `postMessage` (the parent treats any inbound message as untrusted data, validates the marker, and only reads numeric `w`/`h` fields). |
+| Gated floating viewer reuses the same path | The `?view=floating` redesign adds **no** new endpoints, RLS changes, or data access. It receives the same server-prepared, role-gated, email-redacted props as the current viewer and renders into the same `sandbox="allow-scripts"` iframe. Comment/stub writes go through the same browser-client (RLS) + server actions (ownership enforced server-side). So flipping the flag changes presentation only — never who can see or do what. |
 | Web security headers | Defence-in-depth against clickjacking, MIME-sniffing attacks, info leakage to third parties. |
 
 ## Key files
@@ -409,7 +514,7 @@ an open-redirect attack via a crafted magic-link URL.
 | [web/src/app/auth/callback/route.ts](../web/src/app/auth/callback/route.ts) | Magic-link landing route — swaps the one-time code for a session and redirects to `next` (defaults to `/dashboard`). Only relative paths are honoured to prevent open-redirects. |
 | [web/src/app/auth/signout/route.ts](../web/src/app/auth/signout/route.ts) | Sign-out endpoint — clears the session cookies and redirects to `/login` |
 | [web/src/app/dashboard/page.tsx](../web/src/app/dashboard/page.tsx) | "Your decks" page — server-renders two sections: "My decks" (owned) and "Shared with me" (joined via `shared_decks`). |
-| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too). Also runs the creator-claim or recipient-track side-effect and builds the `?next=` sign-in link (preserving `source=capture` so the creator-claim flow survives without a banner). |
+| [web/src/app/viewer/page.tsx](../web/src/app/viewer/page.tsx) | The viewer route — reads a deck by ID server-side (works for orphan decks too). Also runs the creator-claim or recipient-track side-effect and builds the `?next=` sign-in link (preserving `source=capture` so the creator-claim flow survives without a banner). Branches at the end on `?view=floating`: with the flag set it renders `<FloatingViewer>` (the gated redesign) full-bleed; otherwise the unchanged `<SlideViewer>` path. Same data/role props feed both. |
 | [web/src/app/viewer/SlideViewer.tsx](../web/src/app/viewer/SlideViewer.tsx) | The orchestrator: holds slide/stub/flag/comment state, builds the slide↔stub display sequence, and renders the strip, the edge-to-edge slide stage (overlay arrows + counter, a top-right **Comments pill**, top-left flag menu), the flag overlay, and the comments panel (a flex sibling that shrinks the stage, so the pill is never covered). |
 | [web/src/app/viewer/parse-deck.ts](../web/src/app/viewer/parse-deck.ts) | Pure helpers extracted from SlideViewer: `parseDeck` (splits captured HTML into slides + detects canvas size) and `buildSrcdoc` (wraps a slide for the sandboxed iframe). Shared by the stage and the thumbnails. |
 | [web/src/app/viewer/display-items.ts](../web/src/app/viewer/display-items.ts) | Interleaves real slides with stub slides into one ordered display sequence by stub `position`; `positionForGap` maps an insert gap back to a position. |
@@ -417,11 +522,15 @@ an open-redirect attack via a crafted magic-link URL.
 | [web/src/components/AvatarMenu.tsx](../web/src/components/AvatarMenu.tsx) | The signed-in avatar (first initial) with a click-to-open dropdown (PortalPopover): the email, a **My decks** link (→ `/dashboard`), and a **Sign out** action that posts to `/auth/signout`. |
 | [web/src/app/viewer/CopyLinkButton.tsx](../web/src/app/viewer/CopyLinkButton.tsx) | "Copy link" deck action (lives in the actions row, with the "Anyone with this link can view" caption beneath it). Copies the viewer URL with `?source=capture` stripped so recipients can't inherit the creator-claim flag. |
 | [web/src/app/viewer/ThumbnailStrip.tsx](../web/src/app/viewer/ThumbnailStrip.tsx) | The **actions** bar (second row): slide miniatures with teal comment-count badges and flag/active indicators, distinct dashed-teal stub thumbnails, hover-to-insert "+" gaps, and — pinned right — Copy link with the share caption beneath. The scrollbar is hidden (`.no-scrollbar`) so many-slide decks scroll without an ugly bar. The Comments toggle is **not** here — it's a pill on the slide stage. |
-| [web/src/components/PortalPopover.tsx](../web/src/components/PortalPopover.tsx) | Renders floating UI (avatar menu, insert form, flag menu, sign-in prompts) into a `document.body` portal with `position: fixed` + high z-index, so popovers escape the strip's scroll-clipping and never paint under the slide iframe. |
+| [web/src/components/PortalPopover.tsx](../web/src/components/PortalPopover.tsx) | Renders floating UI (avatar menu, insert form, flag menu, sign-in prompts) into a `document.body` portal with `position: fixed` + high z-index, so popovers escape the strip's scroll-clipping and never paint under the slide iframe. Opens below the anchor by default and **flips above** when there isn't room below (keeps a popover on-screen near a bottom edge); top-anchored popovers are unaffected. |
 | [web/src/app/viewer/StubSlideView.tsx](../web/src/app/viewer/StubSlideView.tsx) | Dashed-border display for a requested ("stub") slide, shown in the stage in place of the iframe. |
 | [web/src/app/viewer/InsertStubForm.tsx](../web/src/app/viewer/InsertStubForm.tsx) | The form (Title / Subtitle / What should this slide cover) for requesting a stub at a gap; shows a sign-in prompt when signed out. Rendered inside a PortalPopover. |
 | [web/src/app/viewer/SlideFlagControl.tsx](../web/src/app/viewer/SlideFlagControl.tsx) | The "…" menu on a real slide for flagging it for removal (with reason) or removing your own flag. Menu rendered inside a PortalPopover. |
 | [web/src/app/viewer/CommentsPanel.tsx](../web/src/app/viewer/CommentsPanel.tsx) | Right-side panel (~340px, shrinks the stage rather than overlaying) listing the current slide's comments with a composer; shows stub/flag badges and a sign-in gate when signed out. The slide-in animation uses a small, safe offset so the panel is never stranded off-screen if the animation doesn't run. |
+| [web/src/app/viewer/FloatingViewer.tsx](../web/src/app/viewer/FloatingViewer.tsx) | The **gated redesign** of the viewer (see "Floating viewer" above), rendered only for `?view=floating`. Full-bleed slide with floating corner clusters that collapse-on-idle and reveal-from-top, a comments overlay (right), and a vertical thumbnail strip (left). Reuses the pure building blocks + `useDeckComments`/`useDeckStubs`; **does not import or modify `SlideViewer.tsx`.** |
+| [web/src/app/viewer/useDeckComments.ts](../web/src/app/viewer/useDeckComments.ts) | Comment state + realtime + add/delete/curation for the floating viewer **only** — a deliberate replica of the wiring inside `SlideViewer.tsx`, using the same browser-client writes and the `setCommentCurationAction` server action, so the live viewer stays untouched. |
+| [web/src/app/viewer/useDeckStubs.ts](../web/src/app/viewer/useDeckStubs.ts) | Requested-slide ("stub") state + realtime + insert/delete/dismiss/edit for the floating viewer **only** — same replicate-don't-extract pattern as `useDeckComments`, using the same server actions. |
+| [web/src/app/viewer/FloatingThumbnailStrip.tsx](../web/src/app/viewer/FloatingThumbnailStrip.tsx) | The floating viewer's **vertical** thumbnail strip (left side): slide miniatures + green "N" requested-slide cards + the hover "+" insert gaps, with slide numbers just outside each tile and a thin left scrollbar. Reuses `buildSrcdoc`, `InsertStubForm`, `positionForGap`; the current viewer's horizontal `ThumbnailStrip` is left untouched. |
 | [web/src/app/(shell)/layout.tsx](../web/src/app/(shell)/layout.tsx) | Layout for the app-shell pages (home, dashboard, login) that render the shared `TopNav`. The viewer renders the same `TopNav` itself (outside this route group) so it can pass its own `loginHref`. |
 | [web/next.config.ts](../web/next.config.ts) | Web app config — security headers live here |
 | [docs/auth-migration.sql](./auth-migration.sql) | One-shot SQL for the new `user_id`/`title`/`slide_count` columns and the `decks_*_own` RLS policies. Idempotent — safe to re-run. |

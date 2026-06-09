@@ -97,7 +97,7 @@ Next.js uses **folder = URL**. Key locations:
 | `(shell)/page.tsx` | `/` | Marketing home page |
 | `(shell)/login/page.tsx` | `/login` | Magic-link sign-in form |
 | `(shell)/dashboard/` | `/dashboard` | "Your decks" — owned + shared with you |
-| `viewer/` | `/viewer` | The deck viewer + all collaboration UI (the biggest UI area) |
+| `viewer/` | `/viewer` | The deck viewer + all collaboration UI (the biggest UI area). Add `?view=floating` for the gated redesign (off by default; see below). |
 | `api/slides/route.ts` | `/api/slides` | Where the extension POSTs captured decks |
 | `api/deck-version/route.ts` | `/api/deck-version` | Lightweight "what's the latest version?" check |
 | `api/recount-my-decks/route.ts` | `/api/recount-my-decks` | One-off maintenance/backfill endpoint |
@@ -114,6 +114,18 @@ The `viewer/` folder is the most populated UI area — it holds the slide stage,
 thumbnail strip, comments panel, the requested-slide ("stub") and removal-flag
 controls, the version navigator, and the "Send to Claude" button. These are
 React components; the bulk of the orchestration lives in `viewer/SlideViewer.tsx`.
+
+**Floating viewer (gated redesign).** A second, full-bleed viewer
+(`viewer/FloatingViewer.tsx`) lives alongside the current one and is reached only
+via `?view=floating` (off by default). `viewer/page.tsx` branches on the flag at
+the end of its render — same server-fetched, role-gated data feeds both, and the
+old `SlideViewer.tsx` path is left **byte-for-byte unchanged**. It reuses the pure
+helpers and shared components, but its comment / requested-slide wiring is
+replicated in two viewer-only hooks (`useDeckComments`, `useDeckStubs`) so the
+live viewer is never touched; the comments panel and the vertical thumbnail strip
+(`viewer/FloatingThumbnailStrip.tsx`) float over the slide instead of shrinking
+it. See `docs/architecture.md` → "Floating viewer (gated redesign)" for the full
+rationale and the phase-by-phase decisions.
 
 ---
 
