@@ -149,7 +149,10 @@ function StubThumb({
             width: TILE_W,
             height: h,
             border: active ? "2px solid #4A3FB5" : "1.5px solid #5DCAA5",
-            backgroundColor: "transparent",
+            // Opaque so the slide behind the translucent strip doesn't show
+            // through; a barely-there teal tint keeps a hint of the "requested
+            // slide" accent without reading as green.
+            backgroundColor: "#F6FBF9",
             color: "#0F6E56",
           }}
         >

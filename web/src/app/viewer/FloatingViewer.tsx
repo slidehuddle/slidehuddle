@@ -815,7 +815,7 @@ export default function FloatingViewer({
             <div
               role="complementary"
               aria-label={`Comments on slide ${safeIndex + 1}`}
-              className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+              className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px] overflow-hidden rounded-2xl border border-border bg-white/50 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
             >
               <CommentsPanel
                 slideLabel={safeIndex + 1}
@@ -837,6 +837,7 @@ export default function FloatingViewer({
                 onEdit={editComment}
                 onFlagDismiss={async () => {}}
                 onClose={() => setCommentsPanelOpen(false)}
+                translucent
               />
             </div>
           )}
@@ -855,7 +856,7 @@ export default function FloatingViewer({
             // the bar sits just inside the rounded corner; the content is ltr.
             <div
               aria-label="Slides"
-              className="absolute top-[84px] left-4 bottom-4 z-30 w-[185px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+              className="absolute top-[84px] left-4 bottom-4 z-30 w-[185px] overflow-hidden rounded-2xl border border-border bg-white/50 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
             >
               <div
                 dir="rtl"

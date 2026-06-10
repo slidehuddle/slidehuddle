@@ -70,6 +70,12 @@ type Props = {
   /** Owner curation of the slide's removal flag (dismiss only). */
   onFlagDismiss: (id: string, dismissed: boolean) => Promise<void>;
   onClose: () => void;
+  /** Floating viewer only: render the panel body translucent (so the slide
+   *  shows through, like the thumbnail strip) with each comment on its own
+   *  opaque white card. Header + compose footer stay opaque so all text and
+   *  inputs remain fully legible. Defaults off → the current viewer's panel is
+   *  unchanged. */
+  translucent?: boolean;
 };
 
 function formatTime(iso: string): string {
@@ -136,9 +142,37 @@ export default function CommentsPanel({
   onEdit,
   onFlagDismiss,
   onClose,
+  translucent = false,
 }: Props) {
+  // When translucent, each comment / placeholder sits on its own opaque white
+  // card so the text stays readable over the see-through panel; off, the entries
+  // sit flat on the panel's solid white exactly as before. `shrink-0` is
+  // essential: the card's `overflow-hidden` (for rounded corners) otherwise
+  // gives it a flex min-size of 0, so the cards squeeze to fit the column
+  // instead of keeping their height and letting the list scroll.
+  const cardClass = translucent
+    ? "shrink-0 overflow-hidden rounded-xl border border-border bg-white p-3 shadow-sm"
+    : "";
+  // Owner hover controls (Edit / Dismiss). In the floating viewer they're
+  // icon-only (no text), a lighter grey, and nudged in from the card's rounded
+  // edge; the current viewer keeps the original labelled buttons.
+  const curationBtnClass = translucent
+    ? "pointer-events-auto flex h-8 w-8 items-center justify-center rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+    : "pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105";
+  const curationBtnStyle = {
+    backgroundColor: translucent ? "rgba(90,90,95,0.7)" : "rgba(40,40,38,0.7)",
+  };
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
+  // Floating viewer: the composer stays collapsed to a "+" until the user opens
+  // it, freeing the vertical space the always-on textarea + Send used to take.
+  const [composing, setComposing] = useState(false);
+  // Floating viewer: scroll the list to the newest comment (the bottom, since
+  // the list is oldest→newest) right after the user posts, so they can see it
+  // landed. `scrollPendingRef` is armed on submit and consumed once the list
+  // actually grows.
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrollPendingRef = useRef(false);
   // Owner inline edit: which comment is open in the editor, and its draft text.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -155,22 +189,46 @@ export default function CommentsPanel({
     ...(flag ? [{ kind: "flag" as const, at: flag.created_at, flag }] : []),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  async function submitDraft() {
     const body = draft.trim();
     if (!body || posting) return;
     setPosting(true);
+    scrollPendingRef.current = true;
     try {
       await onAdd(body);
       setDraft("");
+      setComposing(false);
     } finally {
       setPosting(false);
     }
   }
 
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    await submitDraft();
+  }
+
+  // Once the just-posted comment has rendered (the list grew), scroll to the
+  // bottom so the user sees it. Floating viewer only; the current viewer keeps
+  // its existing scroll behaviour.
+  useEffect(() => {
+    if (!translucent || !scrollPendingRef.current) return;
+    scrollPendingRef.current = false;
+    const el = listRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [comments.length, translucent]);
+
   return (
-    <aside className="w-[340px] shrink-0 border-l border-border flex flex-col bg-white animate-[slideInRight_180ms_ease-out]">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border">
+    <aside
+      className={`w-[340px] shrink-0 flex flex-col animate-[slideInRight_180ms_ease-out] ${
+        translucent ? "" : "border-l border-border bg-white"
+      }`}
+    >
+      <header
+        className={`flex items-center justify-between px-4 py-3 border-b border-border ${
+          translucent ? "bg-white" : ""
+        }`}
+      >
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold text-foreground">
             Slide {slideLabel}
@@ -240,14 +298,17 @@ export default function CommentsPanel({
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4"
+      >
         {isStub ? (
-          <p className="text-sm text-muted leading-relaxed">
+          <p className={`text-sm text-muted leading-relaxed ${cardClass}`}>
             This slide hasn&apos;t been built yet. Comments open once it&apos;s
             a real slide.
           </p>
         ) : entries.length === 0 ? (
-          <p className="text-sm text-muted leading-relaxed">
+          <p className={`text-sm text-muted leading-relaxed ${cardClass}`}>
             No comments on this slide yet.
           </p>
         ) : (
@@ -257,7 +318,7 @@ export default function CommentsPanel({
               // removal colour scheme and attributed to whoever flagged it.
               <div
                 key="flag"
-                className={`group relative rounded-lg p-3 flex flex-col gap-1.5 transition-opacity ${entry.flag.dismissed ? "opacity-60" : ""}`}
+                className={`group relative rounded-lg p-3 flex flex-col gap-1.5 transition-opacity ${entry.flag.dismissed ? "opacity-60" : ""} ${translucent ? "shadow-sm" : ""}`}
                 style={{ backgroundColor: "#FCEBEB" }}
               >
                 <div className="flex items-center gap-2">
@@ -338,7 +399,7 @@ export default function CommentsPanel({
                     a removal note). */}
                 {canCurate && !entry.flag.dismissed && (
                   <div
-                    className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pr-3 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+                    className={`pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 ${translucent ? "pr-4" : "pr-3"} pl-12 opacity-0 transition-opacity group-hover:opacity-100`}
                     style={{
                       background:
                         "linear-gradient(to right, transparent, #FCEBEB 45%)",
@@ -349,8 +410,8 @@ export default function CommentsPanel({
                       onClick={() => onFlagDismiss(entry.flag.id, true)}
                       aria-label="Dismiss — won't send to Claude"
                       title="Dismiss — won't send to Claude"
-                      className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
-                      style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
+                      className={curationBtnClass}
+                      style={curationBtnStyle}
                     >
                       <svg
                         width="15"
@@ -366,9 +427,11 @@ export default function CommentsPanel({
                         <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
                         <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
                       </svg>
-                      <span className="text-[8px] font-semibold leading-none">
-                        Dismiss
-                      </span>
+                      {!translucent && (
+                        <span className="text-[8px] font-semibold leading-none">
+                          Dismiss
+                        </span>
+                      )}
                     </button>
                   </div>
                 )}
@@ -376,7 +439,7 @@ export default function CommentsPanel({
             ) : (
               <article
                 key={entry.comment.id}
-                className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""}`}
+                className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""} ${cardClass}`}
               >
                 <div className="flex items-center gap-2">
                   <Avatar email={entry.comment.author_email} />
@@ -407,7 +470,7 @@ export default function CommentsPanel({
                       rows={3}
                       maxLength={4000}
                       autoFocus
-                      className="rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+                      className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
                     />
                     <p className="text-[11px] text-muted leading-snug">
                       Changes what&apos;s sent to Claude — the original comment
@@ -479,7 +542,7 @@ export default function CommentsPanel({
                         lives inline). */}
                     {canCurate && !entry.comment.dismissed && (
                       <div
-                        className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+                        className={`pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 ${translucent ? "pr-4" : ""} pl-12 opacity-0 transition-opacity group-hover:opacity-100`}
                         style={{
                           background:
                             "linear-gradient(to right, transparent, #ffffff 45%)",
@@ -496,8 +559,8 @@ export default function CommentsPanel({
                           }}
                           aria-label="Edit what's sent to Claude"
                           title="Edit what's sent to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
+                          className={curationBtnClass}
+                          style={curationBtnStyle}
                         >
                           <svg
                             width="15"
@@ -513,17 +576,19 @@ export default function CommentsPanel({
                             <path d="M12 20h9" />
                             <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
                           </svg>
-                          <span className="text-[8px] font-semibold leading-none">
-                            Edit
-                          </span>
+                          {!translucent && (
+                            <span className="text-[8px] font-semibold leading-none">
+                              Edit
+                            </span>
+                          )}
                         </button>
                         <button
                           type="button"
                           onClick={() => onDismiss(entry.comment.id, true)}
                           aria-label="Dismiss — won't send to Claude"
                           title="Dismiss — won't send to Claude"
-                          className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
-                          style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
+                          className={curationBtnClass}
+                          style={curationBtnStyle}
                         >
                           <svg
                             width="15"
@@ -539,9 +604,11 @@ export default function CommentsPanel({
                             <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
                             <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
                           </svg>
-                          <span className="text-[8px] font-semibold leading-none">
-                            Dismiss
-                          </span>
+                          {!translucent && (
+                            <span className="text-[8px] font-semibold leading-none">
+                              Dismiss
+                            </span>
+                          )}
                         </button>
                       </div>
                     )}
@@ -555,49 +622,113 @@ export default function CommentsPanel({
 
       {!isStub &&
         (canComment ? (
-          <form
-            onSubmit={handleSubmit}
-            className="border-t border-border p-3 flex flex-col gap-2"
-          >
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Add a comment…"
-              rows={3}
-              maxLength={4000}
-              className="rounded-lg border border-border px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
-              disabled={posting}
-            />
-            <button
-              type="submit"
-              disabled={posting || !draft.trim()}
-              className="self-end inline-flex items-center gap-1.5 rounded-lg bg-brand text-white text-sm font-semibold px-3.5 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          translucent ? (
+            composing ? (
+              // Inline composer — mirrors the owner edit flow (textarea + Save /
+              // Cancel). Opening it on demand keeps the footer tiny the rest of
+              // the time, leaving more room for the comment list.
+              <div className="border-t border-border p-3 bg-white flex flex-col gap-2">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="Add a comment…"
+                  rows={3}
+                  maxLength={4000}
+                  autoFocus
+                  disabled={posting}
+                  className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={posting || !draft.trim()}
+                    onClick={submitDraft}
+                    className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {posting ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setComposing(false);
+                      setDraft("");
+                    }}
+                    className="text-xs text-muted hover:text-foreground transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Collapsed state — just a "+" that opens the composer above.
+              <div className="border-t border-border p-3 bg-white">
+                <button
+                  type="button"
+                  onClick={() => setComposing(true)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-sm font-semibold text-brand hover:border-brand hover:bg-brand/5 transition-colors"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    aria-hidden="true"
+                  >
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  Add a comment
+                </button>
+              </div>
+            )
+          ) : (
+            <form
+              onSubmit={handleSubmit}
+              className="border-t border-border p-3 flex flex-col gap-2"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="Add a comment…"
+                rows={3}
+                maxLength={4000}
+                className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+                disabled={posting}
+              />
+              <button
+                type="submit"
+                disabled={posting || !draft.trim()}
+                className="self-end inline-flex items-center gap-1.5 rounded-lg bg-brand text-white text-sm font-semibold px-3.5 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-              {posting ? "Posting…" : "Send"}
-            </button>
-          </form>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                {posting ? "Posting…" : "Send"}
+              </button>
+            </form>
+          )
         ) : readOnly ? (
-          <div className="border-t border-border p-3">
+          <div className={`border-t border-border p-3 ${translucent ? "bg-white" : ""}`}>
             <p className="text-sm text-muted">
               Comments are read-only on past versions.
             </p>
           </div>
         ) : (
-          <div className="border-t border-border p-3 flex flex-col gap-2">
+          <div className={`border-t border-border p-3 flex flex-col gap-2 ${translucent ? "bg-white" : ""}`}>
             <p className="text-sm text-muted">Sign in to comment.</p>
             <Link
               href={loginHref}
