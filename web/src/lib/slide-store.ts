@@ -635,6 +635,73 @@ export async function getDeckShareCounts(
   return counts;
 }
 
+// One person who is part of a deck's "huddle" — the owner, anyone it's shared
+// with, or anyone who has commented. Identity (`email`) is resolved server-side
+// from the trustworthy `user_id` via getOwnerEmails. PRIVACY: this carries a
+// real email, so it must only ever be sent to a SIGNED-IN viewer who is part of
+// the deck (the caller gates this exactly as it gates stub/flag emails) — never
+// serialized into the page for an anonymous link-holder.
+export type DeckParticipant = {
+  userId: string;
+  email: string | null;
+  isOwner: boolean;
+  /** Whether this person has left at least one comment on the deck (drives the
+   *  small comment marker on their avatar). */
+  commented: boolean;
+};
+
+// Build the deduped participant list for a deck: owner (`ownerId`) +
+// collaborators (shared_decks) + commenters (distinct comments.user_id). Uses
+// the admin client because shared_decks/comments RLS would otherwise hide rows
+// belonging to OTHER users — and the huddle is precisely "everyone involved".
+// The caller passes the owner id it already loaded (getDeckMeta), so we don't
+// re-query decks. Owner sorts first, then by email. Returns the ListLoad shape
+// so a query error isn't mistaken for "nobody here".
+export async function getDeckParticipants(
+  deckId: string,
+  ownerId: string | null,
+): Promise<ListLoad<DeckParticipant>> {
+  const supabase = getSupabaseAdmin();
+  const [sharesRes, commentsRes] = await Promise.all([
+    supabase.from("shared_decks").select("user_id").eq("deck_id", deckId),
+    supabase.from("comments").select("user_id").eq("deck_id", deckId),
+  ]);
+  if (sharesRes.error) logDbError("participants shares fetch failed", sharesRes.error);
+  if (commentsRes.error) {
+    logDbError("participants comments fetch failed", commentsRes.error);
+  }
+  const failed = !!sharesRes.error || !!commentsRes.error;
+
+  const ids = new Set<string>();
+  if (ownerId) ids.add(ownerId);
+  for (const r of (sharesRes.data ?? []) as { user_id: string | null }[]) {
+    if (r.user_id) ids.add(r.user_id);
+  }
+  // Track who has actually commented (a subset of the participants) so the
+  // avatar can carry a small "left a comment" marker.
+  const commenterIds = new Set<string>();
+  for (const r of (commentsRes.data ?? []) as { user_id: string | null }[]) {
+    if (r.user_id) {
+      ids.add(r.user_id);
+      commenterIds.add(r.user_id);
+    }
+  }
+
+  const idList = Array.from(ids);
+  const emails = await getOwnerEmails(idList);
+  const rows: DeckParticipant[] = idList.map((id) => ({
+    userId: id,
+    email: emails[id] ?? null,
+    isOwner: id === ownerId,
+    commented: commenterIds.has(id),
+  }));
+  rows.sort((a, b) => {
+    if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1;
+    return (a.email ?? "").localeCompare(b.email ?? "");
+  });
+  return { rows, failed };
+}
+
 // Re-derive title and slide_count for every deck owned by `userId` and
 // write back any rows where the freshly-computed values differ from what
 // was stored. Useful as a one-off backfill when the derivation logic

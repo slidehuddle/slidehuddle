@@ -15,14 +15,17 @@ import {
   getDeckView,
   getFlagsForDeck,
   getStoredSlides,
+  getDeckParticipants,
   getStubsForDeck,
   recordDeckView,
   trackSharedDeck,
   type CommentRow,
+  type DeckParticipant,
   type FlagRow,
   type StubRow,
 } from "@/lib/slide-store";
 import { computeUpdateBanner, type VersionStamp } from "./version-banner";
+import { computeArrivalActivity, type ArrivalActivity } from "./arrival-activity";
 import { describeChange, summarizeDeckChange } from "./deck-diff";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
@@ -73,6 +76,12 @@ export default async function ViewerPage({
   let initialStubs: StubRow[] = [];
   let initialFlags: FlagRow[] = [];
   let isOwner = false;
+  // The deck owner's user id (decks.user_id), captured from the metadata load so
+  // the floating viewer's "huddle" can mark who the owner is without re-querying.
+  let deckOwnerId: string | null = null;
+  // The viewer's PREVIOUS last_viewed_at (read before this visit records a new
+  // one). Drives the floating viewer's "comments since you were here" banner.
+  let priorLastViewedAt: string | null = null;
 
   // Whether each collaboration dataset FAILED to load (a real error — table
   // missing, query failed, permission denied — not a genuine empty result).
@@ -118,6 +127,7 @@ export default async function ViewerPage({
     loadErrors.versions = versionsLoad.failed;
     const versions = versionsLoad.rows;
     isOwner = !!(user && deck && deck.user_id === user.id);
+    deckOwnerId = deck?.user_id ?? null;
     conversationId = deck?.conversation_id ?? null;
     deckTitle = deck?.title ?? null;
     currentVersion = deck?.version ?? 1;
@@ -186,6 +196,9 @@ export default async function ViewerPage({
         ]);
         initialComments = commentsLoad.rows;
         loadErrors.comments = commentsLoad.failed;
+        // Capture the PRE-update timestamp for the arrival banner (this same
+        // value also feeds the version "updated" banner below).
+        priorLastViewedAt = prior?.last_viewed_at ?? null;
 
         const stamps: VersionStamp[] = versions.map((vv) => ({
           version: vv.version,
@@ -255,6 +268,32 @@ export default async function ViewerPage({
     : "/viewer";
   const loginHref = `/login?next=${encodeURIComponent(viewerPath)}`;
 
+  // "In this huddle" people cluster — floating viewer only. Identities (emails)
+  // are computed server-side and gated by the SAME rule that redacts stub/flag
+  // emails above (canSeeCollaboratorEmails === signed in): an anonymous
+  // link-holder is never sent any participant. We also only do the work for the
+  // floating viewer + stored decks, so the current viewer's behaviour and
+  // round-trips are completely unchanged.
+  let participants: DeckParticipant[] = [];
+  if (useFloatingViewer && source === "stored" && id && canSeeCollaboratorEmails) {
+    const loaded = await getDeckParticipants(id, deckOwnerId);
+    participants = loaded.rows;
+  }
+
+  // Arrival activity — "N comments since you were here" — for the floating
+  // viewer. Computed from data already loaded (initialComments + the PRE-update
+  // last_viewed_at), with no extra query. Same signed-in gate as participants:
+  // anonymous viewers have no comments and no prior view, so they never get one.
+  // Returns null for first-time viewers and when nothing is new.
+  let arrivalActivity: ArrivalActivity | null = null;
+  if (useFloatingViewer && source === "stored" && id && canSeeCollaboratorEmails) {
+    arrivalActivity = computeArrivalActivity({
+      comments: initialComments,
+      lastViewedAt: priorLastViewedAt,
+      currentUserId,
+    });
+  }
+
   // Gated new viewer. Renders the SAME server-prepared deck HTML full-bleed,
   // with floating control clusters over it (Phase 1). All the data-fetching and
   // role-gating above is shared and untouched; we only swap the presentation.
@@ -277,6 +316,13 @@ export default async function ViewerPage({
           // Comments seed. Loaded server-side only for signed-in viewers (so
           // anonymous viewers get [] — no comment authors ever reach them).
           initialComments={initialComments}
+          // "In this huddle" participants — owner + collaborators + commenters,
+          // with identities. Computed server-side ONLY for signed-in viewers
+          // (anonymous link-holders get [] — no names/emails ever reach them).
+          participants={participants}
+          // "N comments since you were here" banner data — only for returning
+          // signed-in viewers with new comments; null otherwise (no banner).
+          arrivalActivity={arrivalActivity}
           // Requested slides shown in the strip + navigation for ALL viewers —
           // email-redacted for anonymous viewers, same as the current viewer.
           initialStubs={viewerStubs}

@@ -29,12 +29,20 @@ import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
 import StubSlideView from "./StubSlideView";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
+import HuddleAvatars from "./HuddleAvatars";
+import ArrivalBanner from "./ArrivalBanner";
+import type { ArrivalActivity } from "./arrival-activity";
 import { useDeckComments } from "./useDeckComments";
 import { useDeckStubs } from "./useDeckStubs";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import AvatarMenu from "@/components/AvatarMenu";
-import type { CommentRow, FlagRow, StubRow } from "@/lib/slide-store";
+import type {
+  CommentRow,
+  DeckParticipant,
+  FlagRow,
+  StubRow,
+} from "@/lib/slide-store";
 
 // ── TUNABLE ──────────────────────────────────────────────────────────────
 // How long (in milliseconds) the controls stay expanded after you stop
@@ -63,6 +71,12 @@ type Props = {
   conversationId: string | null;
   /** Comments seed for the floating overlay; [] for anonymous viewers. */
   initialComments: CommentRow[];
+  /** "In this huddle" participants (owner + collaborators + commenters), with
+   *  identities. [] for anonymous viewers — no names/emails ever reach them. */
+  participants: DeckParticipant[];
+  /** "N comments since you were here" banner data; null = no banner (first-time
+   *  viewer, anonymous viewer, or nothing new). */
+  arrivalActivity: ArrivalActivity | null;
   /** Owner-only raw inputs for the live "Send to AI" prompt; [] otherwise. */
   initialFlags: FlagRow[];
   initialStubs: StubRow[];
@@ -92,6 +106,38 @@ function Placeholder({
   );
 }
 
+// Generic, name-free "huddle" indicator for ANONYMOUS link viewers. They never
+// receive participant identities (privacy rule), but should still sense the deck
+// is collaborative — so they get this static chip with no names, no count, no
+// emails. Signed-in viewers get the real <HuddleAvatars> instead.
+function SharedDeckChip() {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap"
+      style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
+      title="This deck is shared for collaboration"
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+      Shared deck
+    </span>
+  );
+}
+
 // The slides/thumbnails toggle icon: three 16:9 slide thumbnails stacked, the
 // middle one highlighted (the current slide). Inert placeholder for now.
 function SlidesStripIcon() {
@@ -114,11 +160,19 @@ function SlidesStripIcon() {
 }
 
 // Horizontal collapse wrapper. Uses the grid `1fr → 0fr` trick so its auto-width
-// content animates smoothly to zero — and because the inner cell is
-// `overflow-hidden`, a styled button inside (with its own padding/border) is
+// content animates smoothly to zero — and because the inner cell clips
+// horizontally, a styled button inside (with its own padding/border) is
 // CLIPPED to zero rather than flooring at its padding width. When collapsed it's
 // `pointer-events: none`. `expandedExtra` carries any margin that should appear
 // only while expanded (so spacing collapses too). Honors reduced motion.
+//
+// The clip is `overflow-x: clip` — NOT `overflow: hidden` — on purpose. With
+// `hidden`, the cell also clips VERTICALLY at its content height; when the
+// avatars are the tallest child (shared decks, where the taller owner-only
+// "Send to AI" button is absent) the cell is exactly avatar-height, slicing off
+// the avatars' white rings and comment markers ("covered by a white frame").
+// `clip` on one axis leaves the other axis visible, so vertical paint is safe
+// while the horizontal collapse still works.
 function Collapsible({
   expanded,
   reducedMotion,
@@ -146,7 +200,10 @@ function Collapsible({
             }
       }
     >
-      <span className="inline-flex items-center overflow-hidden min-w-0 whitespace-nowrap">
+      <span
+        className="inline-flex items-center min-w-0 whitespace-nowrap"
+        style={{ overflowX: "clip", overflowY: "visible" }}
+      >
         {children}
       </span>
     </span>
@@ -166,6 +223,8 @@ export default function FloatingViewer({
   isOwner,
   conversationId,
   initialComments,
+  participants,
+  arrivalActivity,
   initialFlags,
   initialStubs,
   loginHref,
@@ -627,6 +686,17 @@ export default function FloatingViewer({
                   expandedExtra="mr-2"
                 >
                   <span className="inline-flex items-center gap-2">
+                    {/* "In this huddle" — who's part of the deck. Signed-in
+                        viewers see real avatars; anonymous viewers get the
+                        name-free chip (no identities ever reach them). */}
+                    {currentUserId ? (
+                      <HuddleAvatars
+                        participants={participants}
+                        currentUserId={currentUserId}
+                      />
+                    ) : (
+                      <SharedDeckChip />
+                    )}
                     {currentUserEmail ? (
                       <AvatarMenu email={currentUserEmail} />
                     ) : (
@@ -706,6 +776,25 @@ export default function FloatingViewer({
               </Link>
             )}
           </div>
+
+          {/* Arrival activity — "N comments since you were here" — for a
+              returning signed-in viewer. Floats at top-center on load; "Catch
+              up" opens the comments overlay (jumping to a real slide first if a
+              requested-slide card happens to be active). Dismissable. Only
+              rendered when comments can actually open. */}
+          {arrivalActivity && showComments && (
+            <ArrivalBanner
+              activity={arrivalActivity}
+              onCatchUp={() => {
+                if (activeSlideIndex === null) {
+                  const idx = displayItems.findIndex((it) => it.kind === "slide");
+                  if (idx >= 0) setActiveIndex(idx);
+                }
+                setCommentsPanelOpen(true);
+                reveal();
+              }}
+            />
+          )}
 
           {/* Side navigation arrows. They sit in the side margins; each simply
               hides when its side's panel is open (left arrow under the thumbnail

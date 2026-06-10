@@ -53,7 +53,7 @@ export default function AvatarMenu({ email }: { email: string }) {
             onClick={() => setOpen(false)}
             className="block rounded-lg px-2 py-1.5 text-sm font-semibold text-foreground hover:bg-black/[0.04] transition-colors"
           >
-            My decks
+            My huddles
           </Link>
           <form action="/auth/signout" method="post">
             <button

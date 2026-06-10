@@ -415,7 +415,7 @@ export default function DashboardDecks({
           to a small connector prompt rather than disappearing, so there's a
           steady nudge to start their own decks. */}
       <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-foreground">My decks</h2>
+        <h2 className="text-lg font-semibold text-foreground">My huddles</h2>
         {visibleOwned.length > 0 ? (
           <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {visibleOwned.map((deck) => (
@@ -434,7 +434,7 @@ export default function DashboardDecks({
       {visibleShared.length > 0 && (
         <section className="flex flex-col gap-4">
           <h2 className="text-lg font-semibold text-foreground">
-            Shared with me
+            Huddles shared with me
           </h2>
           <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {visibleShared.map((deck) => (
