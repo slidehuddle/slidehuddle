@@ -359,9 +359,11 @@ A few extra notes:
 ## Floating viewer (gated redesign)
 
 A from-scratch redesign of the deck viewer, built **alongside** the current one
-rather than replacing it. It's reached only by adding `?view=floating` to a
-viewer URL (e.g. `/viewer?id=…&view=floating`) and is **off by default**, so
-shipping it changes nothing for existing users until the flag is flipped.
+rather than replacing it. It is now the **default** viewer. The classic viewer
+stays a code path and is still reachable on demand via `?view=classic` (an
+escape hatch if the new one ever misbehaves), and `FLOATING_VIEWER_DEFAULT` is a
+server-side kill switch — set it to `0`/`false`/`off` to flip the default back
+without a code change. A `?view=floating` URL still forces the new viewer.
 (`view` is a separate query param from `v`, which selects a deck *version* —
 they don't collide.)
 

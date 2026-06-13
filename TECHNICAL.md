@@ -97,7 +97,7 @@ Next.js uses **folder = URL**. Key locations:
 | `(shell)/page.tsx` | `/` | Marketing home page |
 | `(shell)/login/page.tsx` | `/login` | Magic-link sign-in form |
 | `(shell)/dashboard/` | `/dashboard` | "Your decks" — owned + shared with you |
-| `viewer/` | `/viewer` | The deck viewer + all collaboration UI (the biggest UI area). Add `?view=floating` for the gated redesign (off by default; see below). |
+| `viewer/` | `/viewer` | The deck viewer + all collaboration UI (the biggest UI area). The full-bleed "floating" redesign is now the default; add `?view=classic` for the old viewer (see below). |
 | `api/slides/route.ts` | `/api/slides` | Where the extension POSTs captured decks |
 | `api/deck-version/route.ts` | `/api/deck-version` | Lightweight "what's the latest version?" check |
 | `api/recount-my-decks/route.ts` | `/api/recount-my-decks` | One-off maintenance/backfill endpoint |
@@ -115,11 +115,13 @@ thumbnail strip, comments panel, the requested-slide ("stub") and removal-flag
 controls, the version navigator, and the "Send to Claude" button. These are
 React components; the bulk of the orchestration lives in `viewer/SlideViewer.tsx`.
 
-**Floating viewer (gated redesign).** A second, full-bleed viewer
-(`viewer/FloatingViewer.tsx`) lives alongside the current one and is reached only
-via `?view=floating` (off by default). `viewer/page.tsx` branches on the flag at
-the end of its render — same server-fetched, role-gated data feeds both, and the
-old `SlideViewer.tsx` path is left **byte-for-byte unchanged**. It reuses the pure
+**Floating viewer (now the default).** A second, full-bleed viewer
+(`viewer/FloatingViewer.tsx`) lives alongside the current one and is now the
+default. The classic `SlideViewer.tsx` path is still reachable via `?view=classic`,
+and the `FLOATING_VIEWER_DEFAULT` env var (set to `0`/`false`/`off`) is a kill
+switch that flips the default back. `viewer/page.tsx` branches at the end of its
+render — same server-fetched, role-gated data feeds both, and the old
+`SlideViewer.tsx` path is left **byte-for-byte unchanged**. It reuses the pure
 helpers and shared components, but its comment / requested-slide wiring is
 replicated in two viewer-only hooks (`useDeckComments`, `useDeckStubs`) so the
 live viewer is never touched; the comments panel and the vertical thumbnail strip

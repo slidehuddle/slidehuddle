@@ -167,6 +167,15 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 > - **New parking-lot entries:** (or "none")
 > - **Recommended next session:** (one line)
 
+### 2026-06-13 — Floating viewer promoted to default (behind a kill switch)
+- **Items touched:** none (not a formal P-item). Flipped the floating viewer from opt-in (`?view=floating`, default off) to the **default** viewer, per founder request. Classic viewer retained as `?view=classic` escape hatch; new `FLOATING_VIEWER_DEFAULT` env var is a server-side kill switch (`0`/`false`/`off` → roll back to classic, no code change). Founder chose env-var flag + escape hatch via AskUserQuestion.
+- **Files changed:** `web/src/app/viewer/page.tsx` (added `floatingViewerDefault()` helper + `view === "floating" ? … : view === "classic" ? … : default` branch); `web/src/app/viewer/FloatingViewer.tsx` (header comment); docs: `architecture.md`, `TECHNICAL.md`, `FEATURE-INVENTORY.md`.
+- **Verified by:** `npm run lint` + `npm run typecheck` both exit 0. Browser preview: `/viewer` (no param) renders the floating viewer (4 `[data-floating-control]`, zoom/counter chrome, no classic TopNav); `/viewer?view=classic` renders the classic viewer ("Viewing sample deck" banner + thumbnail strip, 0 floating controls); no console errors. **Not yet committed or deployed.**
+- **Flags:** schema change? no. security-relevant? no — same server-fetched, role-gated, email-redacted props feed both viewers; presentation-only switch. MCP surface changed? no.
+- **Known caveat carried in:** floating viewer has **no mobile layout** and **inert zoom** yet (FEATURE-INVENTORY E); making it the default means phones now get it. Uncommitted "huddle signals" work still sits in `.wip-backup/`.
+- **New parking-lot entries:** none.
+- **Recommended next session:** commit + deploy this; then prioritise the floating viewer's mobile layout before it's the default for real users at scale.
+
 ### 2026-06-13 — Session 3: P0.6 CI baseline (lint + type-check) ✅
 - **Items touched:** P0.6 ⬜→✅ — minimal GitHub Actions CI (lint + TypeScript type-check) on push-to-main + PRs. Pushed to main; first CI run on GitHub = success.
 - **Files changed (config):** NEW `.github/workflows/ci.yml`; `web/package.json` gained a `"typecheck": "tsc --noEmit"` script. No application code changed.

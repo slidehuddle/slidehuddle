@@ -1,8 +1,9 @@
 "use client";
 
-// The new, gated "floating" viewer. It lives ALONGSIDE the current viewer
-// (SlideViewer.tsx) and is only reached via ?view=floating — default off, so
-// production is unaffected until the flag is flipped. It deliberately does NOT
+// The new full-bleed "floating" viewer. It lives ALONGSIDE the current viewer
+// (SlideViewer.tsx) and is now the DEFAULT — the classic viewer is still
+// reachable via ?view=classic, and FLOATING_VIEWER_DEFAULT (see page.tsx) is a
+// server-side kill switch that rolls the default back. It deliberately does NOT
 // import or modify SlideViewer; it reuses the same pure building blocks
 // (parseDeck + buildSrcdoc) and the same self-contained controls (version nav,
 // avatar menu, copy-link, send-to-AI) so behaviour matches with no risk to the

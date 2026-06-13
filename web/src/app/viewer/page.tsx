@@ -29,6 +29,16 @@ import { computeArrivalActivity, type ArrivalActivity } from "./arrival-activity
 import { describeChange, summarizeDeckChange } from "./deck-diff";
 import { getSupabaseServer } from "@/lib/supabase-server";
 
+// The new full-bleed "floating" viewer ships ON by default. FLOATING_VIEWER_DEFAULT
+// is a server-side kill switch: set it to "0", "false", or "off" (in Vercel's env
+// settings) to roll the default back to the classic viewer with no code change.
+// Unset — or any other value — keeps the new viewer on. A ?view=classic /
+// ?view=floating URL param always overrides this default per-request.
+function floatingViewerDefault(): boolean {
+  const raw = (process.env.FLOATING_VIEWER_DEFAULT ?? "").trim().toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "off");
+}
+
 export default async function ViewerPage({
   searchParams,
 }: {
@@ -42,11 +52,20 @@ export default async function ViewerPage({
 }) {
   const { slides, id, source: sourceParam, v, view } = await searchParams;
   const isCaptureSource = sourceParam === "capture";
-  // Opt-in flag for the new, full-bleed "floating" viewer. Default off: with no
-  // ?view=floating in the URL, the current viewer renders through its existing,
-  // unchanged code path below. (`view` is a separate param from `v`, which is
-  // the version selector — they don't collide.)
-  const useFloatingViewer = view === "floating";
+  // Which viewer to render. The new full-bleed "floating" viewer is now the
+  // DEFAULT; the classic SlideViewer is the fallback. The URL always wins over
+  // the env default, so there's an escape hatch either way:
+  //   ?view=floating → force the new viewer
+  //   ?view=classic  → force the old viewer (safety net if the new one misbehaves)
+  // With no ?view param we fall back to FLOATING_VIEWER_DEFAULT (a kill switch —
+  // see floatingViewerDefault above). (`view` is a separate param from `v`, the
+  // version selector — they don't collide.)
+  const useFloatingViewer =
+    view === "floating"
+      ? true
+      : view === "classic"
+        ? false
+        : floatingViewerDefault();
 
   let html = "";
   let source: "param" | "stored" | "sample";
