@@ -25,8 +25,8 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | | |
 |---|---|
 | **Current phase** | Phase 0 |
-| **Current focus** | P0.1 ✅ done (RLS verified live on all 7 tables). Next: P0.2 — analytics from zero |
-| **Phase progress** | P0: 1/9 · P1: 0/4 · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
+| **Current focus** | P0.4 — orphan-deck sign-in/claim nudge (planning). P0.2 (analytics) & P0.5 (PDF export) deferred by founder |
+| **Phase progress** | P0: 2/9 · P1: 0/4 · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
 | **Gates passed** | none |
 | **Open blockers** | 0 |
 | **Last session** | 2026-06-13 |
@@ -51,15 +51,15 @@ You are updating this tracker at the **end of a working session**. Follow these 
 |---|---|---|---|---|---|
 | P0.1 | Run `verify-rls.sql` in production; confirm RLS live on all 7 tables | S | ✅ | Greg ran verify-rls.sql in prod Supabase 2026-06-13: all 7 tables `rls_enabled=true`; anon-policy check returned 0 rows (no policy exposed to logged-out role) | 2026-06-13 |
 | P0.2 | Analytics from zero: install + named event schema + funnel/channel attribution + dashboards | S–M | ⬜ | | |
-| P0.3 | Fix: extension update path calls `clearAddressedFeedback` (parity with MCP) | S | ⬜ | | |
+| P0.3 | Fix: extension update path calls `clearAddressedFeedback` (parity with MCP) | S | ✅ | api/slides/route.ts: import + best-effort call after updateDeck (mirrors mcp/route.ts:430) + `resolvedFeedbackCount` in response. Verified e2e: extended test-loop.mjs seeds a stub+flag, runs the token-authed update, asserts both `resolved_at` set + count=2 — all pass (53/54; the 1 fail is unrelated test-drift, see Parking Lot). Code not yet committed | 2026-06-13 |
 | P0.4 | Fix: orphan-deck recipients get a sign-in/claim nudge instead of a silent comment block (instrumented) | S | ⬜ | | |
-| P0.5 | PDF export (the loop's exit) | M | ⬜ | | |
+| P0.5 | PDF export — **deferred to later (convenience feature)** | M | ⬜ deferred | Founder decision 2026-06-13: not a Phase-0 priority — the connected LLM can generate PDFs/exports on request, so SlideHuddle's own export is a convenience, not a loop blocker. No longer required for Gate G0. Revisit post-validation. | 2026-06-13 |
 | P0.6 | CI baseline: lint + `test-loop.mjs` on push to main | S | ⬜ | | |
 | P0.7 | 👤 Trademark searches (UK IPO + USPTO, incl. Slack-"Huddles" question) + name go/no-go | S | ⬜ | | |
 | P0.8 | 👤 UK Ltd incorporated · Stripe account · ICO registration | S | ⬜ | | |
 | P0.9 | 👤 Real-user test: 2–3 outsiders run the full loop (post P0.2–P0.5) | — | ⬜ | | |
 
-**Gate G0** (👤): loop completable incl. export · events flowing · RLS verified · name decided · outside users observed. **Status: not passed.**
+**Gate G0** (👤): loop completable end-to-end (PDF export deprioritized 2026-06-13 — no longer required, see P0.5) · events flowing · RLS verified · name decided · outside users observed. **Status: not passed.**
 
 ## Phase 1 — The feed, on the floating viewer (target: weeks 3–6)
 
@@ -139,7 +139,7 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 
 | Added | Description (one line) | Proposed phase | Promoted? |
 |---|---|---|---|
-| | | | |
+| 2026-06-13 | Stale `test-loop.mjs` assertion: "chip still shows current version while viewing history" greps for literal "Version 2" on the `?v=1` page, but the viewer now shows the latest as short-form "v2" inside an older-version warning label (product is correct). Fix the assertion so the suite is green before P0.6 wires it into CI. | P0 (unblocks P0.6) | |
 
 ## Standing ops checklist (from the inventory's Uncertain list)
 
@@ -165,6 +165,14 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 > - **Flags:** schema change? security-relevant? MCP surface changed? (yes/no each)
 > - **New parking-lot entries:** (or "none")
 > - **Recommended next session:** (one line)
+
+### 2026-06-13 — Session 1: P0.3 extension-update feedback resolution ✅
+- **Items touched:** P0.3 🔵→✅ — wired `clearAddressedFeedback` into the extension update path (parity with MCP `update_deck`), verified end-to-end.
+- **Files changed:** `web/src/app/api/slides/route.ts` (import + best-effort `clearAddressedFeedback` after `updateDeck` + `resolvedFeedbackCount` in the response); `web/scripts/test-loop.mjs` (added `restPost` + a P0.3 block that seeds a stub & flag, runs the token-authed update, asserts both `resolved_at` set + `resolvedFeedbackCount === 2`). **Not yet committed.**
+- **Verified by:** `tsc --noEmit` + eslint clean; `node scripts/test-loop.mjs` against the live (production) Supabase via a local dev server → all 3 P0.3 assertions pass + full create→update→version loop passes (53 passed, 1 failed). The 1 failure is unrelated test-drift (Parking Lot). Test deck auto-cleaned from the DB (cleanup log confirmed).
+- **Flags:** schema change? no. security-relevant? yes — the new call uses the existing (unchanged) service-role-backed `clearAddressedFeedback`; the verification run used the service-role key to seed/delete a throwaway orphan deck in the *production* DB (Greg authorised). No auth/RLS/MCP-surface changes. MCP surface changed? no.
+- **New parking-lot entries:** stale `test-loop.mjs` assertion (historical-view version chip) — fix before P0.6 CI.
+- **Recommended next session:** founder picks next P0 item (P0.4 / P0.5 / P0.6); commit the P0.3 code change; fix the stale test assertion when wiring P0.6.
 
 ### 2026-06-13 — Session 0: orientation, import reference docs, P0.1 ✅
 - **Items touched:** P0.1 ⬜→✅ — Greg ran `docs/verify-rls.sql` in production Supabase. Result: all 7 tables `rls_enabled=true`; the anon-policy check returned 0 rows. RLS is live across the whole DB with nothing exposed to the logged-out role. The plan's #1 blocker, closed clean — no remediation needed.

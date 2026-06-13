@@ -70,7 +70,7 @@ What our planning documents claimed vs. what the code says — applied throughou
 | **Viral loop surfaces** | One seed exists: dashboard empty-state "copy the MCP connector URL" prompt | Viewer badge, recipient post-comment CTA, claim flow as instrumented funnel, export footer, referral mechanic (post-billing) | **S, high leverage** |
 | **Orphan-deck first experience** | **New finding**: recipients of unclaimed decks *cannot comment* — silently | Sign-in/claim nudge in the viewer; treat as an activation-funnel fix | **S, Phase 0** |
 | **Retention reach (email)** | Confirmed absent (no mail library at all) | Provider (Resend-class) arrives at Phase 2 for invites; notification system at Phase 5 | **M then L** |
-| **Export (the loop's exit)** | Confirmed absent — no PDF, no print, no download of any kind | PDF export | **M, Phase 0** |
+| **Export** (convenience, *not* the loop's exit) | Confirmed absent — no PDF, no print, no download of any kind | PDF export | **Deferred 2026-06-13 → later, not Phase 0** (LLMs can generate PDFs on request) |
 | **Trust & legal** (ToS, privacy, GDPR, trust page) | Confirmed absent (no routes) | Pages + data export/delete + DPA template + ICO registration | **S–M** |
 | **Onboarding** | Partial: one floating-viewer hint + empty state | Sample huddle, guided first round, optimised for the "next deck round" wedge | **M** |
 | **Search** | MCP title-contains only; no UI, no FTS | Postgres FTS + a search box | **S** |
@@ -93,12 +93,12 @@ The rule for this phase: make the current loop *completable, measurable, and hon
 2. **Analytics from zero** (S–M, **NEW** severity). Install PostHog (or equivalent), define the named event schema — deck_created, deck_shared, viewer_opened (with referrer/claim attribution), comment_added, stub_added, flag_added, curation_action, send_to_claude, version_published (per path), export_completed — plus the activation and second-huddle derived metrics and channel attribution. Dashboards for the §7 metrics of the business plan.
 3. **Fix the extension-path resolution bug** (S, **NEW**): `/api/slides?update=` must call `clearAddressedFeedback` exactly as MCP `update_deck` does. Without it, Phase-0 testers re-work addressed feedback and the validation reads falsely negative.
 4. **Fix the orphan-deck comment dead-end** (S, **NEW**): recipients of unclaimed decks get a clear "sign in to comment — ask the deck's creator to claim it" state instead of a silent block; instrument it as a funnel step.
-5. **PDF export** (M). The loop's exit; unchanged priority, now verified as truly absent (no print path at all).
+5. **PDF export** (M). **DEFERRED — decision 2026-06-13 (founder): not a Phase-0 priority.** Rationale: the connected LLM can already generate PDFs/exports on request, so SlideHuddle's own export is a *convenience* feature to add later, not a loop blocker. (Originally framed as "the loop's exit"; verified as truly absent — no print path at all. See the §5 export row and the competitive caveat from voice-of-user.md, which the founder weighed in deprioritizing this.)
 6. **CI baseline** (S, **NEW**): lint + `test-loop.mjs` on every push to main. The cheapest insurance available before the Q2 build.
 7. **Business track:** trademark searches (UK IPO + USPTO, the Slack-Huddles question) and the name go/no-go; incorporate the UK Ltd; Stripe account; ICO registration.
 8. **Real-user test of the current loop** with 2–3 outsiders, now that it's measurable and the two bugs are fixed.
 
-*Gate: loop completable end-to-end including export; events flowing; RLS verified; name decided; first outside users observed.*
+*Gate: loop completable end-to-end (PDF export deprioritized 2026-06-13 — no longer required for this gate, see item 5); events flowing; RLS verified; name decided; first outside users observed.*
 
 ### Phase 1 — The feed, on the floating viewer (weeks 3–6)
 
