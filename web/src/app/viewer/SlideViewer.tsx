@@ -53,6 +53,10 @@ type Props = {
   };
   /** True when loading the deck's own HTML errored (vs. an empty/missing deck). */
   deckLoadFailed?: boolean;
+  /** Orphan deck (captured with no signed-in user → no owner yet). Collaboration
+   *  is disabled until the creator claims it; the comments panel explains this
+   *  instead of letting comment/stub/flag silently fail at the database. */
+  isOrphanDeck?: boolean;
   loginHref: string;
 };
 
@@ -70,6 +74,7 @@ export default function SlideViewer({
   conversationId,
   loadErrors,
   deckLoadFailed,
+  isOrphanDeck = false,
   loginHref,
 }: Props) {
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
@@ -432,9 +437,9 @@ export default function SlideViewer({
   // Permission flags.
   const isStored = !!deckId;
   // On a read-only (historical) view the data is shown but not mutable.
-  const canComment = !!(deckId && currentUserId) && !readOnly;
-  const canInsert = !!(deckId && currentUserId) && !readOnly;
-  const canFlag = !!(deckId && currentUserId) && !readOnly;
+  const canComment = !!(deckId && currentUserId) && !readOnly && !isOrphanDeck;
+  const canInsert = !!(deckId && currentUserId) && !readOnly && !isOrphanDeck;
+  const canFlag = !!(deckId && currentUserId) && !readOnly && !isOrphanDeck;
   // The deck owner can curate feedback (dismiss/edit) on the current deck only,
   // never on a read-only historical view.
   const canCurate = isOwner && !readOnly && !!deckId;
@@ -986,6 +991,7 @@ export default function SlideViewer({
             canComment={canComment}
             canCurate={canCurate}
             readOnly={readOnly}
+            isOrphanDeck={isOrphanDeck}
             currentUserId={currentUserId}
             loginHref={loginHref}
             onAdd={handleAddComment}

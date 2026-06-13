@@ -59,6 +59,9 @@ type Props = {
   /** Viewing a past version: comments are visible but can't be added. Drives a
    *  "read-only" footer instead of the "sign in to comment" prompt. */
   readOnly?: boolean;
+  /** Orphan deck (no owner yet): collaboration is off until the creator claims
+   *  it. Shows an explanatory nudge instead of the "sign in to comment" CTA. */
+  isOrphanDeck?: boolean;
   currentUserId: string | null;
   loginHref: string;
   onAdd: (body: string) => Promise<void>;
@@ -134,6 +137,7 @@ export default function CommentsPanel({
   canComment,
   canCurate = false,
   readOnly = false,
+  isOrphanDeck = false,
   currentUserId,
   loginHref,
   onAdd,
@@ -725,6 +729,13 @@ export default function CommentsPanel({
           <div className={`border-t border-border p-3 ${translucent ? "bg-white" : ""}`}>
             <p className="text-sm text-muted">
               Comments are read-only on past versions.
+            </p>
+          </div>
+        ) : isOrphanDeck ? (
+          <div className={`border-t border-border p-3 ${translucent ? "bg-white" : ""}`}>
+            <p className="text-sm text-muted leading-relaxed">
+              Comments aren&apos;t available yet — this deck hasn&apos;t been
+              claimed by its creator. Ask them to claim it to turn on commenting.
             </p>
           </div>
         ) : (

@@ -25,8 +25,8 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | | |
 |---|---|
 | **Current phase** | Phase 0 |
-| **Current focus** | P0.4 — orphan-deck sign-in/claim nudge (planning). P0.2 (analytics) & P0.5 (PDF export) deferred by founder |
-| **Phase progress** | P0: 2/9 · P1: 0/4 · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
+| **Current focus** | P0.4 ✅ verified. Next: founder picks — P0.6 (CI + fix stale test) recommended. P0.2 (analytics) & P0.5 (PDF export) deferred |
+| **Phase progress** | P0: 3/9 · P1: 0/4 · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
 | **Gates passed** | none |
 | **Open blockers** | 0 |
 | **Last session** | 2026-06-13 |
@@ -52,7 +52,7 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | P0.1 | Run `verify-rls.sql` in production; confirm RLS live on all 7 tables | S | ✅ | Greg ran verify-rls.sql in prod Supabase 2026-06-13: all 7 tables `rls_enabled=true`; anon-policy check returned 0 rows (no policy exposed to logged-out role) | 2026-06-13 |
 | P0.2 | Analytics from zero: install + named event schema + funnel/channel attribution + dashboards | S–M | ⬜ | | |
 | P0.3 | Fix: extension update path calls `clearAddressedFeedback` (parity with MCP) | S | ✅ | api/slides/route.ts: import + best-effort call after updateDeck (mirrors mcp/route.ts:430) + `resolvedFeedbackCount` in response. Verified e2e: extended test-loop.mjs seeds a stub+flag, runs the token-authed update, asserts both `resolved_at` set + count=2 — all pass (53/54; the 1 fail is unrelated test-drift, see Parking Lot). Code not yet committed | 2026-06-13 |
-| P0.4 | Fix: orphan-deck recipients get a sign-in/claim nudge instead of a silent comment block (instrumented) | S | ⬜ | | |
+| P0.4 | Fix: orphan-deck recipients get a sign-in/claim nudge instead of a silent comment block (instrumented) | S | ✅ | Viewer detects orphan decks (deck.user_id null, post-claim) and shows a clear nudge in the comments panel instead of a silently-failing composer; canComment/canInsert/canFlag gated off for orphans (page.tsx + SlideViewer.tsx + CommentsPanel.tsx). tsc+eslint clean; verified via browser preview (anon viewer on an orphan deck sees the nudge — screenshot). **Instrumentation deferred with P0.2 (analytics).** | 2026-06-13 |
 | P0.5 | PDF export — **deferred to later (convenience feature)** | M | ⬜ deferred | Founder decision 2026-06-13: not a Phase-0 priority — the connected LLM can generate PDFs/exports on request, so SlideHuddle's own export is a convenience, not a loop blocker. No longer required for Gate G0. Revisit post-validation. | 2026-06-13 |
 | P0.6 | CI baseline: lint + `test-loop.mjs` on push to main | S | ⬜ | | |
 | P0.7 | 👤 Trademark searches (UK IPO + USPTO, incl. Slack-"Huddles" question) + name go/no-go | S | ⬜ | | |
@@ -140,6 +140,7 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 | Added | Description (one line) | Proposed phase | Promoted? |
 |---|---|---|---|
 | 2026-06-13 | Stale `test-loop.mjs` assertion: "chip still shows current version while viewing history" greps for literal "Version 2" on the `?v=1` page, but the viewer now shows the latest as short-form "v2" inside an older-version warning label (product is correct). Fix the assertion so the suite is green before P0.6 wires it into CI. | P0 (unblocks P0.6) | |
+| 2026-06-13 | Floating viewer (`?view=floating`, off by default) has the SAME orphan-deck dead-end P0.4 fixed in the current viewer — its comment path isn't orphan-aware. Port the orphan nudge when finishing the floating viewer. | P1 (with P1.1) | |
 
 ## Standing ops checklist (from the inventory's Uncertain list)
 
@@ -165,6 +166,14 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 > - **Flags:** schema change? security-relevant? MCP surface changed? (yes/no each)
 > - **New parking-lot entries:** (or "none")
 > - **Recommended next session:** (one line)
+
+### 2026-06-13 — Session 2: P0.4 orphan-deck comment nudge ✅ + PDF export deprioritized
+- **Items touched:** P0.4 ⬜→✅ — orphan decks (no owner yet) now show a clear "comments aren't available until the creator claims it" nudge instead of a comment box that silently fails at the DB. P0.5 marked deferred (founder decision — LLMs can generate PDFs).
+- **Files changed:** `web/src/app/viewer/page.tsx` (compute `isOrphanDeck` after the claim logic + pass to SlideViewer), `web/src/app/viewer/SlideViewer.tsx` (prop + gate canComment/canInsert/canFlag off for orphans + pass to panel), `web/src/app/viewer/CommentsPanel.tsx` (prop + orphan footer state). Docs: tracker + `gap-analysis-plan.md` PDF deprioritization. **Code not yet committed at time of writing.**
+- **Verified by:** `tsc --noEmit` + eslint clean; browser preview — created a throwaway orphan deck (anon POST), viewed it anonymously, opened the comments panel, confirmed the nudge renders (screenshot); throwaway deck deleted from the DB afterwards (verified gone). The signed-in-orphan path renders the same nudge branch (canComment gated false, tsc-verified).
+- **Flags:** schema change? no. security-relevant? the fix touches no auth/RLS/service-role/MCP code; the verification used the service-role key to create + delete one throwaway orphan deck in the *production* DB (consistent with the earlier authorised test run), cleanup confirmed. MCP surface changed? no.
+- **New parking-lot entries:** (1) floating viewer has the same orphan dead-end — port the nudge in P1.1; (2 — already logged) stale historical-version-chip test assertion.
+- **Recommended next session:** P0.6 (CI on push to main) — bundle the stale-test fix so the suite is green; then the founder track (P0.7–P0.9). P0.4 instrumentation rides on P0.2 when analytics lands.
 
 ### 2026-06-13 — Session 1: P0.3 extension-update feedback resolution ✅
 - **Items touched:** P0.3 🔵→✅ — wired `clearAddressedFeedback` into the extension update path (parity with MCP `update_deck`), verified end-to-end.

@@ -82,6 +82,11 @@ export default async function ViewerPage({
   // The viewer's PREVIOUS last_viewed_at (read before this visit records a new
   // one). Drives the floating viewer's "comments since you were here" banner.
   let priorLastViewedAt: string | null = null;
+  // Orphan deck = captured with no signed-in user, so it has no owner yet and
+  // nobody (signed-in or not) can comment/stub/flag until the creator claims
+  // it. Drives the P0.4 "claim to enable collaboration" nudge. Set after the
+  // claim logic below so a just-claimed capturer is correctly excluded.
+  let isOrphanDeck = false;
 
   // Whether each collaboration dataset FAILED to load (a real error — table
   // missing, query failed, permission denied — not a genuine empty result).
@@ -228,6 +233,13 @@ export default async function ViewerPage({
       const viewerUserId = user.id;
       after(() => recordDeckView(id, viewerUserId));
     }
+
+    // Orphan = the deck exists but has no owner (captured with no session).
+    // After a successful claim above, isOwner is true, so the just-claimed
+    // capturer is excluded; a recipient or anonymous viewer of an unclaimed
+    // deck gets isOrphanDeck = true and sees the nudge instead of a comment box
+    // that would silently fail at the database (no owner → not accessible).
+    isOrphanDeck = !!deck && deck.user_id === null && !isOwner;
   } else {
     // param / sample sources still need the session for the top-nav state.
     const {
@@ -389,6 +401,7 @@ export default async function ViewerPage({
         conversationId={conversationId}
         loadErrors={loadErrors}
         deckLoadFailed={deckLoadFailed}
+        isOrphanDeck={isOrphanDeck}
         loginHref={loginHref}
       />
     </main>
