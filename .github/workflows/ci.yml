@@ -1,0 +1,45 @@
+name: CI
+
+# Minimal Phase-0 safety net (P0.6): lint + TypeScript type-check on every push
+# to main and every pull request. No database, no secrets — these checks only
+# read the code. The end-to-end script (web/scripts/test-loop.mjs) is NOT run
+# here: it needs the service-role key + the live database, which must never be
+# wired into CI. Wire it in later against a dedicated TEST Supabase project.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch cancels an in-progress run, to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    # The Next.js app (and its package.json / lockfile) live in web/, so every
+    # npm command runs there.
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck

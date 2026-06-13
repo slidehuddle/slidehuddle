@@ -25,7 +25,7 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | | |
 |---|---|
 | **Current phase** | Phase 0 |
-| **Current focus** | P0.4 ✅ verified. Next: founder picks — P0.6 (CI + fix stale test) recommended. P0.2 (analytics) & P0.5 (PDF export) deferred |
+| **Current focus** | P0.6 — CI workflow created + checks pass locally; pending a push to GitHub to see a green run (push also deploys P0.3/P0.4 to prod — founder's call). P0.2 & P0.5 deferred |
 | **Phase progress** | P0: 3/9 · P1: 0/4 · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
 | **Gates passed** | none |
 | **Open blockers** | 0 |
@@ -54,7 +54,7 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | P0.3 | Fix: extension update path calls `clearAddressedFeedback` (parity with MCP) | S | ✅ | api/slides/route.ts: import + best-effort call after updateDeck (mirrors mcp/route.ts:430) + `resolvedFeedbackCount` in response. Verified e2e: extended test-loop.mjs seeds a stub+flag, runs the token-authed update, asserts both `resolved_at` set + count=2 — all pass (53/54; the 1 fail is unrelated test-drift, see Parking Lot). Code not yet committed | 2026-06-13 |
 | P0.4 | Fix: orphan-deck recipients get a sign-in/claim nudge instead of a silent comment block (instrumented) | S | ✅ | Viewer detects orphan decks (deck.user_id null, post-claim) and shows a clear nudge in the comments panel instead of a silently-failing composer; canComment/canInsert/canFlag gated off for orphans (page.tsx + SlideViewer.tsx + CommentsPanel.tsx). tsc+eslint clean; verified via browser preview (anon viewer on an orphan deck sees the nudge — screenshot). **Instrumentation deferred with P0.2 (analytics).** | 2026-06-13 |
 | P0.5 | PDF export — **deferred to later (convenience feature)** | M | ⬜ deferred | Founder decision 2026-06-13: not a Phase-0 priority — the connected LLM can generate PDFs/exports on request, so SlideHuddle's own export is a convenience, not a loop blocker. No longer required for Gate G0. Revisit post-validation. | 2026-06-13 |
-| P0.6 | CI baseline: lint + `test-loop.mjs` on push to main | S | ⬜ | | |
+| P0.6 | CI baseline: lint + `test-loop.mjs` on push to main | S | 🔵 | `.github/workflows/ci.yml` runs `npm ci` → `npm run lint` → `npm run typecheck` (Node 20) on push-to-main + PRs; added `typecheck` script to web/package.json. No DB/secrets. Both checks pass locally (exit 0). test-loop.mjs deliberately EXCLUDED — it needs the service-role key + live DB; wire later vs a dedicated test Supabase project. **🔵 until a green run is seen on GitHub (needs a push — which also deploys P0.3/P0.4 to prod; founder's call).** | 2026-06-13 |
 | P0.7 | 👤 Trademark searches (UK IPO + USPTO, incl. Slack-"Huddles" question) + name go/no-go | S | ⬜ | | |
 | P0.8 | 👤 UK Ltd incorporated · Stripe account · ICO registration | S | ⬜ | | |
 | P0.9 | 👤 Real-user test: 2–3 outsiders run the full loop (post P0.2–P0.5) | — | ⬜ | | |
@@ -166,6 +166,16 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 > - **Flags:** schema change? security-relevant? MCP surface changed? (yes/no each)
 > - **New parking-lot entries:** (or "none")
 > - **Recommended next session:** (one line)
+
+### 2026-06-13 — Session 3: P0.6 CI baseline (lint + type-check) 🔵
+- **Items touched:** P0.6 ⬜→🔵 — minimal GitHub Actions CI (lint + TypeScript type-check) on push-to-main + PRs. Goes ✅ once a green run is observed on GitHub.
+- **Files changed (config):** NEW `.github/workflows/ci.yml`; `web/package.json` gained a `"typecheck": "tsc --noEmit"` script. No application code changed.
+- **Decision:** `test-loop.mjs` is NOT in CI — it needs the service-role key + live DB (reads web/.env.local, hits prod), which must never be wired into CI. Documented safe path: run it later against a dedicated TEST Supabase project. (Also means the parked stale-test assertion no longer blocks CI.)
+- **Verified by:** ran the exact CI commands locally — `npm run lint` (exit 0) and `npm run typecheck` (exit 0). The workflow YAML itself is unverified until it runs on GitHub.
+- **Flags:** schema change? no. security-relevant? CI deliberately uses NO secrets/DB (the whole point). MCP surface changed? no.
+- **Blocker to ✅ / founder decision:** seeing the run requires pushing to `main`, and push-to-main auto-deploys via Vercel — so the first push also ships P0.3 + P0.4 to production. Awaiting Greg's go on push/deploy.
+- **New parking-lot entries:** none.
+- **Recommended next session:** once Greg approves the push, confirm the green run on GitHub → P0.6 ✅; then the founder track (P0.7–P0.9).
 
 ### 2026-06-13 — Session 2: P0.4 orphan-deck comment nudge ✅ + PDF export deprioritized
 - **Items touched:** P0.4 ⬜→✅ — orphan decks (no owner yet) now show a clear "comments aren't available until the creator claims it" nudge instead of a comment box that silently fails at the DB. P0.5 marked deferred (founder decision — LLMs can generate PDFs).
