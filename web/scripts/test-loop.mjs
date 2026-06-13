@@ -53,6 +53,20 @@ async function restGet(path) {
   return { status: r.status, body: await r.json().catch(() => null) };
 }
 
+async function restPost(path, row) {
+  const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "content-type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(row),
+  });
+  return { status: r.status, body: await r.json().catch(() => null) };
+}
+
 async function main() {
   // ============ UNIT: feedback prompt ============
   console.log("\nUnit — buildFeedbackPrompt");
@@ -182,6 +196,31 @@ async function main() {
     skip("conversation binding", "claude_conversation_id column not migrated — run docs/deck-conversation-migration.sql");
   }
 
+  // ---- P0.3: seed feedback so we can prove the update RESOLVES it ----
+  // The extension's update path must mark addressed stubs/flags resolved, the
+  // same way MCP update_deck does. Seed one of each via a service-role insert
+  // (so requested_by/flagged_by may be null; dismissed defaults false,
+  // resolved_at defaults null) and assert they're resolved after the update.
+  const feedbackReady =
+    (await restGet("slide_stubs?select=resolved_at&limit=0")).status === 200 &&
+    (await restGet("slide_flags?select=resolved_at&limit=0")).status === 200;
+  let seededStubId = null;
+  let seededFlagId = null;
+  if (feedbackReady) {
+    const s = await restPost("slide_stubs", {
+      deck_id: deckId, position: 1, title: "Pricing", body: "Three tiers",
+    });
+    const f = await restPost("slide_flags", {
+      deck_id: deckId, slide_index: 0, reason: "Outdated numbers",
+    });
+    seededStubId = s.body?.[0]?.id ?? null;
+    seededFlagId = f.body?.[0]?.id ?? null;
+    assert(s.status === 201 && seededStubId, "seed: inserted a requested slide (stub)", `${s.status} ${JSON.stringify(s.body)}`);
+    assert(f.status === 201 && seededFlagId, "seed: inserted a removal flag", `${f.status} ${JSON.stringify(f.body)}`);
+  } else {
+    skip("feedback resolution", "slide_stubs/slide_flags or resolved_at not migrated — run the stubs/flags + feedback-resolution migrations");
+  }
+
   // UPDATE auth gating (no versioning table needed for these).
   const noTok = await fetch(`${BASE}/api/slides?update=${deckId}`, {
     method: "POST", headers: { "content-type": "text/html", origin: ORIGIN }, body: DECK_V2,
@@ -247,6 +286,18 @@ async function main() {
   assert(vs.length === 2, "deck_versions has 2 rows (v1 + v2)", JSON.stringify(vs.map((x) => x.version)));
   assert(vs[0]?.version === 1 && vs[0]?.html_content?.includes("Roadmap") && !vs[0]?.html_content?.includes("Pricing"), "v1 snapshot is the ORIGINAL html", "v1 wrong");
   assert(vs[1]?.version === 2 && vs[1]?.html_content?.includes("Pricing"), "v2 snapshot is the REVISED html", "v2 wrong");
+
+  // ---- P0.3: the extension update must RESOLVE addressed feedback ----
+  // (parity with MCP update_deck). The seeded stub + flag should now carry a
+  // resolved_at timestamp, and the update response should report the count.
+  if (feedbackReady && seededStubId && seededFlagId) {
+    console.log("\nLive — feedback resolution on extension update (P0.3)");
+    const stubAfter = await restGet(`slide_stubs?id=eq.${seededStubId}&select=resolved_at`);
+    const flagAfter = await restGet(`slide_flags?id=eq.${seededFlagId}&select=resolved_at`);
+    assert(stubAfter.body?.[0]?.resolved_at != null, "extension update resolved the requested slide (resolved_at set)", JSON.stringify(stubAfter.body));
+    assert(flagAfter.body?.[0]?.resolved_at != null, "extension update resolved the removal flag (resolved_at set)", JSON.stringify(flagAfter.body));
+    assert(updBody.resolvedFeedbackCount === 2, "update response reports resolvedFeedbackCount = 2", JSON.stringify(updBody.resolvedFeedbackCount));
+  }
 
   // ---- Viewer page: version chip + viewing a previous version ----
   console.log("\nLive — viewer page (version UI)");

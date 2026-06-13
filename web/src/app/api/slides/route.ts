@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  clearAddressedFeedback,
   countSlides,
   dependsOnClaudeDesignSystem,
   storeSlides,
@@ -216,12 +217,22 @@ export async function POST(request: NextRequest) {
     }
     try {
       const { version, title } = await updateDeck(updateId, html);
+      // The revision was made in response to the deck's feedback, so mark the
+      // items it addressed (requested slides + flags) as RESOLVED — the record
+      // is kept (auditable) but they stop showing as open, so they aren't
+      // re-worked next round. Comments are version-scoped, so they fall off the
+      // new version on their own. Mirrors the MCP update_deck path
+      // (mcp/route.ts) for parity. Best-effort: clearAddressedFeedback
+      // logs-and-continues and never throws, so a resolution hiccup can never
+      // undo the already-saved revision.
+      const resolved = await clearAddressedFeedback(updateId);
       return NextResponse.json(
         {
           id: updateId,
           url: `${viewerOrigin}/viewer?id=${updateId}`,
           version,
           title,
+          resolvedFeedbackCount: resolved.stubs + resolved.flags,
         },
         { status: 200, headers },
       );
