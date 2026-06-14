@@ -25,7 +25,7 @@ You are updating this tracker at the **end of a working session**. Follow these 
 | | |
 |---|---|
 | **Current phase** | Phase 1 (product track) — Gate G0 not yet passed; founder still owns P0.7–P0.9 in parallel |
-| **Current focus** | P1.1 🔵 — **Stages B + C + D done** (B approved by founder 2026-06-14). D: anonymous recipients now see a count-only **"N reviewing"** chip (not "Huddlers"/"Shared deck"); deck-title z-index confirmed already clean (title lives inside the brand pill); inset/Floating-Canvas styling already applies to the recipient view. **Stage E (mobile) DEFERRED by founder** until the base desktop experience is complete. Remaining: solidify desktop + Stage F (rollout); then Stage E (mobile). Today's P1.1 desktop work (Stages B–D + fixes) **committed + pushed to `main` 2026-06-14** (deploys via Vercel). |
+| **Current focus** | P1.1 🔵 — **Stages B + C + D done** (B approved by founder 2026-06-14). D: anonymous recipients now see a count-only **"N reviewing"** chip (not "Huddlers"/"Shared deck"); deck-title z-index confirmed already clean (title lives inside the brand pill); inset/Floating-Canvas styling already applies to the recipient view. **Stage E (mobile) DEFERRED by founder** until the base desktop experience is complete. Today's P1.1 desktop work (Stages B–D + fixes) **committed + pushed to `main` 2026-06-14** (deploys via Vercel; CI green). **Stage F (rollout)** is effectively satisfied by default-for-all + `?view=classic` fallback — to close it: a founder prod smoke-check; per-account/test-group targeting parked → **Phase 2** (see Parking Lot). Stage E (mobile) parked. |
 | **Phase progress** | P0: 4/9 · P1: 0/4 (P1.1 in progress) · P2: 0/6 · P3: 0/6 · P4: 0/5 · P5: 0/6 |
 | **Gates passed** | none |
 | **Open blockers** | 0 |
@@ -141,6 +141,7 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 |---|---|---|---|
 | 2026-06-13 | Stale `test-loop.mjs` assertion: "chip still shows current version while viewing history" greps for literal "Version 2" on the `?v=1` page, but the viewer now shows the latest as short-form "v2" inside an older-version warning label (product is correct). Fix the assertion so the suite is green before P0.6 wires it into CI. | P0 (unblocks P0.6) | |
 | 2026-06-13 | Floating viewer (`?view=floating`, off by default) has the SAME orphan-deck dead-end P0.4 fixed in the current viewer — its comment path isn't orphan-aware. Port the orphan nudge when finishing the floating viewer. | P1 (with P1.1) | ✅ Done 2026-06-14 (P1.1 Stage C) |
+| 2026-06-14 | **Per-account / test-group viewer targeting.** Today the floating viewer is default-for-ALL with `?view=classic` + the `FLOATING_VIEWER_DEFAULT` env kill switch as fallbacks — there's no way to put a *specific account* (or a named test group) on one viewer vs another. Lightest partial = make `?view=` sticky per browser (a cookie). A true per-account/admin toggle needs the **workspaces + profiles/per-user-flag** entities, so it naturally rides with those. Not needed while the only audience is the close design-partner group. | P2 (with workspaces/profiles, P2.1/P2.4) | |
 
 ## Standing ops checklist (from the inventory's Uncertain list)
 
@@ -166,6 +167,13 @@ Slack/Teams bridge · AI variants + voting · live huddle mode · mobile push ·
 > - **Flags:** schema change? security-relevant? MCP surface changed? (yes/no each)
 > - **New parking-lot entries:** (or "none")
 > - **Recommended next session:** (one line)
+
+### 2026-06-14 — Stage F (rollout): position + the logical next step (documentation only)
+- **Stage F is effectively satisfied already.** The floating viewer is the default for everyone (deployed today, CI run 27511906445 green), with `?view=classic` + the `FLOATING_VIEWER_DEFAULT` env kill switch as fallbacks. At this stage the only real audience is the close design-partner group, so "everyone" ≈ "the test group" — no per-account/test-group targeting is needed yet.
+- **Most logical next step to CLOSE Stage F:** a **founder production smoke-check (👤)** — open the live deck viewer, confirm the redesign renders correctly, and confirm `?view=classic` still falls back to the old viewer. That's the "safely" half (CI/type-check is already green). After that, Stage F can be marked done.
+- **When the founder will need to address per-account/test-group targeting:** defer it until **Phase 2**. It becomes *needed* only when the audience broadens beyond the close partner group — i.e., when there are users you'd want to keep on the classic viewer while partners get the new one — OR when Phase 2's **workspaces + profiles/per-user flags** land (the natural home for an account-level toggle). Logged in the Parking Lot (proposed P2). Until then, default-for-all is the correct, lightest choice.
+- **Related dependency for *measuring* rollout:** analytics (**P0.2**, deferred) — needed to see whether partners actually use the new viewer; relevant as design-partner recruitment (**P1.4**) ramps.
+- **No code changes** — documentation only.
 
 ### 2026-06-14 — Committed + pushed today's P1.1 desktop work to `main`
 - Committed the day's P1.1 desktop work as one commit and pushed to `main`: the colour-rule/cluster refinement, Stage B (inset + persistence + gear), the toast top-layer + popover-clamp fixes, Stage C (version-awareness + flag UI + orphan nudge), Stage D ("N reviewing"), and the flag/requested-slide "…" → bottom-right + dismiss-hide.
