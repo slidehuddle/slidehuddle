@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import AnchoredToast from "@/components/AnchoredToast";
 
 // Fallback clipboard path for browsers that block navigator.clipboard.
 function legacyCopy(text: string): boolean {
@@ -40,6 +41,7 @@ function legacyCopy(text: string): boolean {
 // either way, so the current viewer is unchanged.
 export default function CopyLinkButton({ label = "Copy link" }: { label?: string } = {}) {
   const [copied, setCopied] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   async function handleCopy() {
     const url = new URL(window.location.href);
@@ -67,6 +69,7 @@ export default function CopyLinkButton({ label = "Copy link" }: { label?: string
           row (no horizontal "shake"). The inactive label stays in the layout
           (invisible) to hold the width. */}
       <button
+        ref={btnRef}
         type="button"
         onClick={handleCopy}
         aria-live="polite"
@@ -87,24 +90,23 @@ export default function CopyLinkButton({ label = "Copy link" }: { label?: string
         </span>
       </button>
 
-      {/* Transient confirmation toast under the button. Carries the visibility
-          status that used to sit permanently in the actions row — it fades out
-          on its own ~2s after the copy (in lockstep with the `copied` state). */}
-      <div
-        role="status"
-        aria-hidden={!copied}
-        className={`pointer-events-none absolute right-0 top-full mt-1.5 z-10 inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] text-white shadow-lg transition-opacity duration-300 ${
-          copied ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        {/* green tick — confirms the copy succeeded */}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-        <span>
-          Link copied <span className="text-white/55">· anyone with this link can view</span>
-        </span>
-      </div>
+      {/* Transient confirmation toast — rendered on the TOP layer via
+          AnchoredToast (portaled to <body>), so it's never hidden behind a
+          floating panel/pill. Fades out ~2s after the copy (with `copied`). */}
+      <AnchoredToast anchorRef={btnRef} open={copied} maxWidth={320}>
+        <div
+          role="status"
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] text-white shadow-lg"
+        >
+          {/* green tick — confirms the copy succeeded */}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>
+            Link copied <span className="text-white/55">· anyone with this link can view</span>
+          </span>
+        </div>
+      </AnchoredToast>
     </div>
   );
 }

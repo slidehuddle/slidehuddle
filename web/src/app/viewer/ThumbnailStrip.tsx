@@ -517,11 +517,12 @@ export default function ThumbnailStrip({
       </div>
 
       {/* Deck actions, pinned to the far right. Copy link (the share action)
-          comes first; the AI-loop action (amber when there's feedback to send,
-          muted otherwise) sits to its right. The "anyone with this link can
-          view" status appears transiently in a toast under Copy link rather
-          than as a resting caption. Updates are driven from the capture moment
-          in Claude, so there's no "Update this deck" button here. */}
+          comes first; the AI-loop action (purple-outline split button when
+          there's feedback to send, a muted chip otherwise) sits to its right.
+          The "anyone with this link can view" status appears transiently in a
+          toast under Copy link rather than as a resting caption. Updates are
+          driven from the capture moment in Claude, so there's no "Update this
+          deck" button here. */}
       {showCopyLink && (
         <div className="flex flex-row items-center justify-center gap-2.5 pl-3 shrink-0">
           <CopyLinkButton />

@@ -39,9 +39,14 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 function StubActionsMenu({
   onEdit,
   onDelete,
+  placement = "inline",
 }: {
   onEdit: () => void;
   onDelete: () => Promise<void>;
+  /** "inline" (default, classic viewer) = a light "…" beside the badge;
+   *  "bottom-right" (floating viewer) = the dark, hover-revealed circular "…"
+   *  in the slide's bottom-right corner, matching the removal-flag control. */
+  placement?: "inline" | "bottom-right";
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -74,7 +79,11 @@ function StubActionsMenu({
         onClick={() => setOpen((v) => !v)}
         aria-label="Requested slide options"
         aria-expanded={open}
-        className="flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-black/[0.06] hover:text-foreground transition-colors"
+        className={
+          placement === "bottom-right"
+            ? "flex h-8 w-8 items-center justify-center rounded-full bg-black/30 text-white opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-black/50 transition-opacity backdrop-blur-sm"
+            : "flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-black/[0.06] hover:text-foreground transition-colors"
+        }
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <circle cx="5" cy="12" r="1.6" />
@@ -88,7 +97,7 @@ function StubActionsMenu({
         open={open}
         onClose={close}
         width={confirming ? 300 : 220}
-        placement="bottom-center"
+        placement={placement === "bottom-right" ? "bottom-end" : "bottom-center"}
       >
         {confirming ? (
           <div
@@ -242,6 +251,7 @@ export default function StubSlideView({
   onDelete,
   onDismiss,
   onEdit,
+  actionsPlacement = "inline",
 }: {
   stub: StubRow;
   currentUserId: string | null;
@@ -254,6 +264,10 @@ export default function StubSlideView({
     stubId: string,
     fields: { title: string; subtitle: string; body: string },
   ) => Promise<void>;
+  /** Where the edit/delete "…" sits. "inline" (default) = beside the "Requested
+   *  by" badge (classic viewer); "bottom-right" = the floating viewer's
+   *  hover-revealed corner control, matching the removal-flag "…". */
+  actionsPlacement?: "inline" | "bottom-right";
 }) {
   // The person who requested the stub or the deck owner may edit or delete it.
   const canEdit =
@@ -307,8 +321,9 @@ export default function StubSlideView({
               </svg>
               Requested by {displayName(stub.requested_by_email)}
             </span>
-            {canDelete && (
+            {canDelete && actionsPlacement === "inline" && (
               <StubActionsMenu
+                placement="inline"
                 onEdit={() => setEditing(true)}
                 onDelete={() => onDelete(stub.id)}
               />
@@ -432,6 +447,19 @@ export default function StubSlideView({
               Dismiss
             </span>
           </button>
+        </div>
+      )}
+
+      {/* Edit/delete "…" — bottom-right, matching the real-slide flag control's
+          look and feel (floating viewer only; classic keeps the inline "…"
+          beside the badge). Reveals on card hover via the root's `group`. */}
+      {canDelete && actionsPlacement === "bottom-right" && (
+        <div className="absolute bottom-3 right-3 z-20">
+          <StubActionsMenu
+            placement="bottom-right"
+            onEdit={() => setEditing(true)}
+            onDelete={() => onDelete(stub.id)}
+          />
         </div>
       )}
 

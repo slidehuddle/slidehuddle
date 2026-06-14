@@ -14,11 +14,14 @@ type Props = {
   loginHref: string;
   onFlag: (reason: string) => Promise<void>;
   onUnflag: (flagId: string) => Promise<void>;
+  /** Which corner of the slide the "…" sits in. Defaults to "top-left" (the
+   *  classic viewer); the floating viewer passes "bottom-right". */
+  position?: "top-left" | "bottom-right";
 };
 
-// The subtle "…" menu in the top-right corner of a real slide. Opens a small
-// reason input to flag the slide for removal, or (for the person who flagged
-// it) an option to remove the flag.
+// The subtle "…" menu in a corner of a real slide. Opens a small reason input to
+// flag the slide for removal, or (for the person who flagged it) an option to
+// remove the flag.
 export default function SlideFlagControl({
   flag,
   canFlag,
@@ -26,6 +29,7 @@ export default function SlideFlagControl({
   loginHref,
   onFlag,
   onUnflag,
+  position = "top-left",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -46,9 +50,11 @@ export default function SlideFlagControl({
   }
 
   const ownsFlag = !!flag && !!currentUserId && flag.flagged_by === currentUserId;
+  const posClass =
+    position === "bottom-right" ? "bottom-3 right-3" : "top-3 left-3";
 
   return (
-    <div className="absolute top-3 left-3 z-20">
+    <div className={`absolute ${posClass} z-20`}>
       <button
         ref={btnRef}
         type="button"
@@ -75,7 +81,7 @@ export default function SlideFlagControl({
         open={open}
         onClose={() => setOpen(false)}
         width={256}
-        placement="bottom-center"
+        placement={position === "bottom-right" ? "bottom-end" : "bottom-center"}
       >
         <div
           className="rounded-xl border border-border bg-white shadow-[0_12px_40px_rgba(0,0,0,0.15)] p-3"

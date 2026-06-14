@@ -61,7 +61,14 @@ export default function PortalPopover<T extends HTMLElement>({
       const belowTop = r.bottom + gap;
       const flipUp =
         h > 0 && belowTop + h > window.innerHeight - 8 && r.top - gap - h >= 8;
-      const top = flipUp ? r.top - gap - h : belowTop;
+      let top = flipUp ? r.top - gap - h : belowTop;
+      // Clamp vertically so the WHOLE panel stays on-screen. Without this, a tall
+      // panel near the bottom edge (e.g. the "Request a slide" form opened from a
+      // low thumbnail) that fits neither below nor above opens downward and spills
+      // under the viewport — its submit button unreachable. Shift it up to fit;
+      // it may overlap the anchor, which is far better than an off-screen button.
+      if (h > 0) top = Math.min(top, window.innerHeight - 8 - h);
+      top = Math.max(8, top);
       setPos({ top, left });
     }
     update();

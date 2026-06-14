@@ -12,16 +12,22 @@
 // Phase 2: the controls don't fully disappear — at rest they COLLAPSE to a
 // minimal set (logo + slides toggle on the left; Comments + Share on the right;
 // the side arrows). The rest (deck title, version, avatar, Send-to-AI, counter,
-// zoom, pin) tucks away. Moving the cursor to the TOP of the frame — or tabbing
+// pin) tucks away. Moving the cursor to the TOP of the frame — or tabbing
 // to a control — expands everything again. We never lay a full-viewport layer
 // over the slide, so its centre stays selectable/clickable; collapsed controls
 // are `pointer-events: none`.
 //
-//   Persistent: logo+name → dashboard, slides toggle, Comments, Share, arrows.
-//   Collapse at rest: version chip + history, avatar / Sign in, Send to AI,
-//               counter, zoom, pin.
+//   Persistent: logo+name → dashboard, slides toggle, Comments, Share, arrows,
+//               the slide COUNTER, and the rail SLIVER (badge dots on the left
+//               edge — the team's comment activity never fully disappears, §4.1).
+//   Collapse at rest: version chip + history, avatar / Sign in, Send to AI, pin.
+//
+// Inset, not overlay (design system §3.3): when the thumbnail strip or comments
+// panel is OPEN, the slide SCALES DOWN and SHIFTS into the safe area beside the
+// panel rather than being covered by it — the design review's #1 must-fix.
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseDeck, buildSrcdoc, EMPTY_DECK, type ParsedDeck } from "./parse-deck";
 import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
@@ -29,15 +35,19 @@ import CopyLinkButton from "./CopyLinkButton";
 import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
 import StubSlideView from "./StubSlideView";
+import SlideFlagControl from "./SlideFlagControl";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
 import HuddleAvatars from "./HuddleAvatars";
 import ArrivalBanner from "./ArrivalBanner";
 import type { ArrivalActivity } from "./arrival-activity";
 import { useDeckComments } from "./useDeckComments";
 import { useDeckStubs } from "./useDeckStubs";
+import { useDeckFlags } from "./useDeckFlags";
+import { useDeckVersionWatch } from "./useDeckVersionWatch";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import AvatarMenu from "@/components/AvatarMenu";
+import PortalPopover from "@/components/PortalPopover";
 import type {
   CommentRow,
   DeckParticipant,
@@ -53,6 +63,20 @@ const IDLE_FADE_MS = 6000;
 // How close to the top of the frame (in px) the cursor must come to re-expand
 // the controls. Larger = easier to trigger.
 const TOP_REVEAL_PX = 90;
+// ─────────────────────────────────────────────────────────────────────────
+
+// ── INSET LAYOUT (design system §3.3) ─────────────────────────────────────
+// How much horizontal room each open side panel claims, so the slide can shrink
+// to fit the space that's LEFT instead of being covered. Each value is the
+// panel's own width + the edge gap it floats in (left-4 / right-4 = 16px) + a
+// little breathing room between the panel and the slide. Keep these in sync
+// with the panels' widths and offsets in the JSX below.
+const EDGE_GAP = 16; // matches the panels' left-4 / right-4
+const PANEL_GAP = 12; // breathing room between a panel and the slide
+const STRIP_W = 185; // left thumbnail strip width (w-[185px])
+const PANEL_W = 340; // right comments panel width (w-[340px])
+const STRIP_INSET = EDGE_GAP + STRIP_W + PANEL_GAP; // 213
+const PANEL_INSET = EDGE_GAP + PANEL_W + PANEL_GAP; // 368
 // ─────────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -75,37 +99,23 @@ type Props = {
   /** "In this huddle" participants (owner + collaborators + commenters), with
    *  identities. [] for anonymous viewers — no names/emails ever reach them. */
   participants: DeckParticipant[];
+  /** Count of people in the huddle, for the anonymous "N reviewing" chip. This
+   *  is a COUNT ONLY (no identities) and is the only participant info an
+   *  anonymous viewer receives. */
+  reviewingCount: number;
   /** "N comments since you were here" banner data; null = no banner (first-time
    *  viewer, anonymous viewer, or nothing new). */
   arrivalActivity: ArrivalActivity | null;
-  /** Owner-only raw inputs for the live "Send to AI" prompt; [] otherwise. */
+  /** Removal flags on the deck, seeding the live flag state (emails redacted for
+   *  anonymous viewers). Used both for the flag-for-removal UI and as input to
+   *  the owner's "Send to AI" prompt. */
   initialFlags: FlagRow[];
   initialStubs: StubRow[];
+  /** Orphan deck (captured with no owner yet): collaboration is off until the
+   *  creator claims it — gates comment/flag/stub creation off and shows a nudge. */
+  isOrphanDeck: boolean;
   loginHref: string;
 };
-
-// A visible-but-inert control. Signals "coming soon" without pretending to work:
-// not a button, not focusable, cursor shows it's unavailable.
-function Placeholder({
-  title,
-  className = "",
-  children,
-}: {
-  title: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <span
-      aria-hidden="true"
-      data-floating-control
-      title={`${title} — coming soon`}
-      className={`inline-flex items-center justify-center text-[#9a96b8] opacity-70 cursor-not-allowed select-none ${className}`}
-    >
-      {children}
-    </span>
-  );
-}
 
 // Generic, name-free "huddle" indicator for ANONYMOUS link viewers. They never
 // receive participant identities (privacy rule), but should still sense the deck
@@ -135,6 +145,39 @@ function SharedDeckChip() {
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
       Shared deck
+    </span>
+  );
+}
+
+// Guest/recipient "N reviewing" chip for ANONYMOUS link viewers (design system
+// §6.5/§10.6: client surfaces soften to "3 reviewing", never "Huddlers"). They
+// receive only the COUNT — never names or emails — so this is privacy-safe. The
+// count is the people in the huddle (owner + collaborators + commenters), the
+// same set the signed-in HuddleAvatars cluster shows. Teal = the team.
+function ReviewingChip({ count }: { count: number }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap"
+      style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
+      title={`${count} ${count === 1 ? "person is" : "people are"} reviewing this deck`}
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+      {count} reviewing
     </span>
   );
 }
@@ -225,11 +268,14 @@ export default function FloatingViewer({
   conversationId,
   initialComments,
   participants,
+  reviewingCount,
   arrivalActivity,
   initialFlags,
   initialStubs,
+  isOrphanDeck,
   loginHref,
 }: Props) {
+  const router = useRouter();
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
   // initial render empty so SSR is safe, then parse on the client after mount —
   // identical to how SlideViewer.tsx handles it.
@@ -260,6 +306,17 @@ export default function FloatingViewer({
       readOnly,
       initialComments,
     });
+  const { flags, addFlag, removeFlag, dismissFlag } = useDeckFlags({
+    deckId,
+    currentUserId,
+    currentUserEmail,
+    readOnly,
+    initialFlags,
+  });
+  // Notice an out-of-band revision (e.g. the AI publishing a new version) and
+  // prompt a refresh — never auto-yank the page. null until a newer version
+  // than the one on screen appears.
+  const liveNewVersion = useDeckVersionWatch({ deckId, readOnly, viewingVersion });
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const [stripOpen, setStripOpen] = useState(false);
 
@@ -320,6 +377,9 @@ export default function FloatingViewer({
   const [pinned, setPinned] = useState(false);
   const pinnedRef = useRef(false);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bottom-left settings menu (currently holds the "pin floating bars" toggle).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLButtonElement>(null);
 
   // Read "should stay open" straight from the live DOM, so there's no extra
   // state to keep in sync: an open PortalPopover renders role="dialog"/"menu";
@@ -383,6 +443,27 @@ export default function FloatingViewer({
       if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
     };
   }, [reveal, scheduleCollapse]);
+
+  // `T` toggles the thumbnail rail (design system §4.1). Defined after `reveal`
+  // so opening the rail can also reschedule the collapse timer.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "t" && e.key !== "T") return;
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable)
+      )
+        return;
+      if (!deckId) return;
+      setStripOpen((o) => !o);
+      reveal();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [deckId, reveal]);
 
   // Pin / keep-visible toggle. Set the ref first so the very next collapse check
   // sees the new state, then expand immediately.
@@ -466,8 +547,28 @@ export default function FloatingViewer({
     return () => window.removeEventListener("message", handle);
   }, []);
 
-  // Scale-to-fit: contain the deck's natural aspect ratio within the full-bleed
-  // stage (the whole viewport here — no top nav, no panels).
+  // ── Inset, not overlay (design system §3.3) ──────────────────────────────
+  // When the strip and/or comments panel are OPEN, the slide must not sit
+  // underneath them — it shrinks and shifts into the safe area beside them (the
+  // design review's #1 must-fix). Each inset is gated on the panel ACTUALLY
+  // rendering (same conditions as the JSX), so a toggle that's "on" but not
+  // showing — e.g. comments open while a requested-slide card is active — does
+  // not wrongly inset the slide. `isStored`/`showComments` are computed further
+  // down, so we inline the equivalent conditions here (deckId / currentUserId).
+  const stripVisible = stripOpen && !!deckId;
+  const commentsVisible =
+    commentsPanelOpen &&
+    !!deckId &&
+    !!currentUserId &&
+    activeSlideIndex !== null;
+  const leftInset = stripVisible ? STRIP_INSET : 0;
+  const rightInset = commentsVisible ? PANEL_INSET : 0;
+  // Keep the slide centred in the gap that's left: shift by half the difference
+  // of the two insets (right panel only → shift left; left strip only → right).
+  const slideOffsetX = (leftInset - rightInset) / 2;
+
+  // Scale-to-fit: contain the deck's natural aspect ratio within the safe area —
+  // the full-bleed stage minus whatever the open side panels claim (above).
   const stageRef = useRef<HTMLDivElement>(null);
   const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
   const [scale, setScale] = useState(1);
@@ -477,7 +578,10 @@ export default function FloatingViewer({
       if (!stage) return;
       const r = stage.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
-      const maxW = r.width;
+      // Shrink the fit-box by whatever the open panels claim, so the slide never
+      // renders underneath them. Clamp so a very narrow viewport can't drive the
+      // available width to zero or negative.
+      const maxW = Math.max(120, r.width - leftInset - rightInset);
       const maxH = r.height;
       const slideAR = effectiveW / effectiveH;
       let w: number;
@@ -499,7 +603,7 @@ export default function FloatingViewer({
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", measure);
     };
-  }, [effectiveW, effectiveH, hasItems]);
+  }, [effectiveW, effectiveH, hasItems, leftInset, rightInset]);
 
   const srcDoc = useMemo(
     () =>
@@ -538,21 +642,48 @@ export default function FloatingViewer({
     return m;
   }, [comments]);
 
-  // Role gating mirrors the current viewer.
-  const canComment = !!(deckId && currentUserId) && !readOnly;
-  const canCurate = isOwner && !readOnly && !!deckId;
+  // Slides that carry comments — the dots shown in the rail SLIVER ("the team's
+  // fingerprints", design system §3.2/§4.1), in slide order.
+  const commentedSlides = useMemo(
+    () =>
+      [...commentCountBySlide.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([slideIndex]) => slideIndex)
+        .sort((a, b) => a - b),
+    [commentCountBySlide],
+  );
 
-  // Live "Send to AI" prompt — recomputed as the owner curates comments AND
-  // requested slides, so the action reflects dismiss/edit immediately. Owner-only
-  // (null otherwise), built from the SAME selectCuratedFeedback the current
-  // viewer and the MCP `get_feedback` tool use. Flags are the seeded owner-only
-  // input (removal flags aren't editable in this viewer).
+  // Role gating mirrors the current viewer (and gates collaboration off on an
+  // orphan deck — no owner yet, so the DB would reject writes anyway).
+  const canComment = !!(deckId && currentUserId) && !readOnly && !isOrphanDeck;
+  const canCurate = isOwner && !readOnly && !!deckId;
+  // Flagging a slide for removal uses the same gate as commenting.
+  const canFlag = canComment;
+  // The removal flag on the slide currently shown, for the comments-panel entry
+  // + the slide's flag control. DISMISSED flags are excluded: when the owner
+  // dismisses a flag it should disappear (not linger struck-through still
+  // "feeling in effect") — it stays in the DB for audit and out of the AI prompt,
+  // just hidden here. The slide then reads as un-flagged and can be re-flagged.
+  const currentSlideFlag = useMemo(
+    () =>
+      activeSlideIndex === null
+        ? null
+        : flags.find(
+            (f) => f.slide_index === activeSlideIndex && !f.dismissed,
+          ) ?? null,
+    [flags, activeSlideIndex],
+  );
+
+  // Live "Send to AI" prompt — recomputed over the LIVE comments, removal flags,
+  // and requested slides, so curation (dismiss/edit) and a newly added/removed
+  // flag reflect immediately. Owner-only (null otherwise), built from the SAME
+  // selectCuratedFeedback the current viewer and the MCP `get_feedback` tool use.
   const feedbackText = useMemo(
     () =>
       canSendToAI
-        ? buildFeedbackPrompt(selectCuratedFeedback(comments, initialFlags, stubs))
+        ? buildFeedbackPrompt(selectCuratedFeedback(comments, flags, stubs))
         : null,
-    [canSendToAI, comments, initialFlags, stubs],
+    [canSendToAI, comments, flags, stubs],
   );
 
   // Shared frosted-pill look for the corner clusters. Fixed height so the two
@@ -562,13 +693,20 @@ export default function FloatingViewer({
   const cluster =
     "absolute z-20 flex items-center h-[52px] rounded-2xl border border-black/[0.06] bg-white/80 px-2.5 shadow-[0_6px_22px_rgba(0,0,0,0.10)] backdrop-blur-md";
 
-  // Bottom controls (counter, zoom, pin) overlap the slide, so they fade OUT at
-  // rest (the cluster "extra" items collapse horizontally instead). Under
+  // The pin overlaps the slide, so it fades OUT at rest (the cluster "extra"
+  // items collapse horizontally instead). The slide COUNTER, by contrast, is
+  // persistent (§4.1) and never fades — see below. Under
   // `prefers-reduced-motion` we drop the animation and switch instantly.
   const fadeTransition = reducedMotion ? "" : "transition-opacity duration-300";
   const bottomFade = expanded
     ? `${fadeTransition} opacity-100`
     : `${fadeTransition} opacity-0 pointer-events-none`;
+
+  // The slide glides into its inset position (size + offset) when a panel opens
+  // or closes — 200ms per §3.3; under reduced motion it snaps.
+  const slideTransition = reducedMotion
+    ? undefined
+    : "transform 200ms ease, width 200ms ease, height 200ms ease";
 
   return (
     <div
@@ -587,6 +725,8 @@ export default function FloatingViewer({
               style={{
                 width: cardSize.width ? `${cardSize.width}px` : undefined,
                 height: cardSize.height ? `${cardSize.height}px` : undefined,
+                transform: `translateX(${slideOffsetX}px)`,
+                transition: slideTransition,
               }}
             >
               <StubSlideView
@@ -594,6 +734,7 @@ export default function FloatingViewer({
                 currentUserId={currentUserId}
                 isOwner={isOwner}
                 canCurate={canCurate}
+                actionsPlacement="bottom-right"
                 onDelete={deleteStub}
                 onDismiss={dismissStub}
                 onEdit={editStub}
@@ -601,10 +742,12 @@ export default function FloatingViewer({
             </div>
           ) : (
             <div
-              className="relative bg-white overflow-hidden"
+              className="group/stage relative bg-white overflow-hidden"
               style={{
                 width: cardSize.width ? `${cardSize.width}px` : undefined,
                 height: cardSize.height ? `${cardSize.height}px` : undefined,
+                transform: `translateX(${slideOffsetX}px)`,
+                transition: slideTransition,
               }}
             >
               <iframe
@@ -620,6 +763,26 @@ export default function FloatingViewer({
                   transformOrigin: "center center",
                 }}
               />
+              {/* Flag-for-removal — the subtle "…" menu top-left of the slide
+                  (reused from the classic viewer). Hidden on historical views;
+                  the action itself is gated by canFlag (signed-in collaborator,
+                  non-orphan). Its popover portals out, so the card's
+                  overflow-hidden doesn't clip it. */}
+              {isStored && !readOnly && !isOrphanDeck && (
+                <SlideFlagControl
+                  flag={currentSlideFlag}
+                  canFlag={canFlag}
+                  currentUserId={currentUserId}
+                  loginHref={loginHref}
+                  position="bottom-right"
+                  onFlag={(reason) =>
+                    activeSlideIndex !== null
+                      ? addFlag(activeSlideIndex, reason)
+                      : Promise.resolve()
+                  }
+                  onUnflag={removeFlag}
+                />
+              )}
             </div>
           )}
 
@@ -695,6 +858,8 @@ export default function FloatingViewer({
                         participants={participants}
                         currentUserId={currentUserId}
                       />
+                    ) : reviewingCount >= 1 ? (
+                      <ReviewingChip count={reviewingCount} />
                     ) : (
                       <SharedDeckChip />
                     )}
@@ -721,6 +886,10 @@ export default function FloatingViewer({
                 </Collapsible>
 
                 {showComments && activeSlideIndex !== null && (
+                  // Bare at rest (no pill) — Comments only TOGGLE the panel, so
+                  // it's the lightest control in the cluster: a teal speech-bubble
+                  // (teal = the team) + the count. A green wash on hover; when the
+                  // panel is OPEN it fills solid green with white — a clear ON state.
                   <button
                     type="button"
                     onClick={() => {
@@ -728,15 +897,21 @@ export default function FloatingViewer({
                       reveal();
                     }}
                     aria-pressed={commentsPanelOpen}
-                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold shrink-0 transition-colors ${
+                    aria-label={
+                      currentSlideCommentCount > 0
+                        ? `Comments (${currentSlideCommentCount})`
+                        : "Comments"
+                    }
+                    title="Comments"
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-semibold shrink-0 transition-colors ${
                       commentsPanelOpen
                         ? "bg-[#0F6E56] text-white"
-                        : "bg-[#E1F5EE] text-[#085041] hover:bg-[#d3f0e6]"
+                        : "text-[#0F6E56] hover:bg-[#D3F0E6]"
                     }`}
                   >
                     <svg
-                      width="15"
-                      height="15"
+                      width="20"
+                      height="20"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -746,18 +921,8 @@ export default function FloatingViewer({
                     >
                       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
-                    Comments
                     {currentSlideCommentCount > 0 && (
-                      <span
-                        className="inline-flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1.5 text-[11px] font-bold"
-                        style={
-                          commentsPanelOpen
-                            ? { backgroundColor: "#ffffff", color: "#0F6E56" }
-                            : { backgroundColor: "#0F6E56", color: "#ffffff" }
-                        }
-                      >
-                        {currentSlideCommentCount}
-                      </span>
+                      <span className="tabular-nums">{currentSlideCommentCount}</span>
                     )}
                   </button>
                 )}
@@ -797,6 +962,52 @@ export default function FloatingViewer({
             />
           )}
 
+          {/* Out-of-band revision prompt. Appears when the deck was revised
+              elsewhere (e.g. the AI publishing a new version via MCP) while you're
+              viewing — it PROMPTS rather than auto-refreshing, so a half-typed
+              comment is never discarded. Amber = an AI revision event
+              (design-system §2.2); "Load vN" is a purple action you take. Sits
+              below the arrival banner so the two never collide. The refresh
+              re-fetches server-side and the version `key` (page.tsx) remounts the
+              viewer with the new version's slides + comments. */}
+          {liveNewVersion !== null && (
+            <div
+              role="status"
+              data-floating-control
+              className="absolute top-[72px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5 max-w-[90vw] rounded-2xl border border-black/[0.06] px-3.5 py-2 shadow-[0_6px_22px_rgba(0,0,0,0.12)] backdrop-blur-md"
+              style={{ backgroundColor: "#FAEEDA", color: "#633806" }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0"
+              >
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+              <p className="text-sm leading-snug">
+                <span className="font-semibold">This deck was revised</span> — now
+                on v{liveNewVersion}
+              </p>
+              <button
+                type="button"
+                onClick={() => router.refresh()}
+                className="shrink-0 rounded-full px-2.5 py-1 text-sm font-semibold transition-colors hover:bg-black/5"
+                style={{ color: "#4A3FB5" }}
+              >
+                Load v{liveNewVersion}
+              </button>
+            </div>
+          )}
+
           {/* Side navigation arrows. They sit in the side margins; each simply
               hides when its side's panel is open (left arrow under the thumbnail
               strip, right arrow under the comments panel). */}
@@ -806,7 +1017,8 @@ export default function FloatingViewer({
               onClick={goPrev}
               disabled={safeIndex === 0}
               aria-label="Previous slide"
-              className="absolute left-4 top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm"
+              // Nudged right of the rail sliver (left edge) when a deck is shown.
+              className={`absolute ${deckId ? "left-8" : "left-4"} top-1/2 z-20 -translate-y-1/2 h-11 w-11 rounded-full bg-white/75 backdrop-blur-sm border border-black/[0.08] flex items-center justify-center text-brand hover:bg-white disabled:opacity-0 transition-all shadow-sm`}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -827,55 +1039,100 @@ export default function FloatingViewer({
             </button>
           )}
 
-          {/* Counter pill, bottom-center. */}
-          <span className={`absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/55 text-white text-xs font-medium px-3 py-1 tabular-nums select-none ${bottomFade}`}>
+          {/* Counter pill, bottom-center — ALWAYS visible (§4.1: the counter
+              never hides), so it does not take the bottomFade. */}
+          <span className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/55 text-white text-xs font-medium px-3 py-1 tabular-nums select-none">
             {safeIndex + 1} / {itemCount}
             {activeStub !== null ? " · requested slide" : ""}
           </span>
 
-          {/* Zoom control placeholder, bottom-right (inert for now). Hidden while
-              the comments panel is open, since the panel sits over this corner. */}
-          {!commentsPanelOpen && (
-            <Placeholder
-              title="Zoom"
-              className={`absolute bottom-4 right-4 z-20 gap-2 rounded-xl border border-black/[0.06] bg-white/80 px-2.5 py-1.5 text-sm font-semibold shadow-[0_6px_22px_rgba(0,0,0,0.10)] backdrop-blur-md ${bottomFade}`}
+          {/* Settings, bottom-left — a gear that opens a small menu UPWARD
+              (PortalPopover auto-flips above near the bottom edge). It holds the
+              "pin floating bars" toggle. The button is data-floating-control and,
+              while its menu is open, isHeldOpen() keeps the chrome up (role
+              "menu"); when bars are pinned, the chrome never fades at all. The
+              wrapper carries the bottomFade; the menu is portaled to <body>, so
+              it stays put even as the gear fades. */}
+          <div className={`absolute bottom-4 left-4 z-20 ${bottomFade}`}>
+            <button
+              ref={settingsRef}
+              type="button"
+              data-floating-control
+              onClick={() => {
+                setSettingsOpen((o) => !o);
+                reveal();
+              }}
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+              aria-label="Viewer settings"
+              title="Settings"
+              className="relative h-9 w-9 rounded-xl border flex items-center justify-center backdrop-blur-md shadow-[0_6px_22px_rgba(0,0,0,0.10)] transition-colors hover:bg-white"
+              style={{
+                backgroundColor: "rgba(255,255,255,0.8)",
+                color: "#6b6b75",
+                borderColor: "rgba(0,0,0,0.06)",
+              }}
             >
-              <span className="w-4 text-center">&minus;</span>
-              100%
-              <span className="w-4 text-center">+</span>
-            </Placeholder>
-          )}
+              {/* gear / settings icon */}
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              {/* small purple dot when bars are pinned — shows the active setting
+                  without opening the menu. */}
+              {pinned && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white"
+                  style={{ backgroundColor: "#4A3FB5" }}
+                />
+              )}
+            </button>
 
-          {/* Pin / keep-visible toggle, bottom-left. When pinned, the controls
-              never fade (it counts as "held open"), so the pin stays reachable
-              to switch auto-hide back on. */}
-          <button
-            type="button"
-            data-floating-control
-            onClick={togglePin}
-            aria-pressed={pinned}
-            title={
-              pinned
-                ? "Controls pinned — click to let them auto-hide"
-                : "Keep controls visible (pin)"
-            }
-            className={`absolute bottom-4 left-4 z-20 h-9 w-9 rounded-xl border flex items-center justify-center backdrop-blur-md shadow-[0_6px_22px_rgba(0,0,0,0.10)] ${bottomFade}`}
-            style={
-              pinned
-                ? { backgroundColor: "#4A3FB5", color: "#ffffff", borderColor: "#4A3FB5" }
-                : {
-                    backgroundColor: "rgba(255,255,255,0.8)",
-                    color: "#6b6b75",
-                    borderColor: "rgba(0,0,0,0.06)",
-                  }
-            }
-          >
-            {/* thumbtack / pin icon */}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="12" y1="17" x2="12" y2="22" />
-              <path d="M5 17h14l-1.6-2.6a2 2 0 0 1-.3-1.05V8a2 2 0 0 1 1.4-1.9L19 6V4H5v2l.5.1A2 2 0 0 1 6.9 8v5.35a2 2 0 0 1-.3 1.05L5 17z" />
-            </svg>
-          </button>
+            <PortalPopover
+              anchorRef={settingsRef}
+              open={settingsOpen}
+              onClose={() => setSettingsOpen(false)}
+              width={244}
+              placement="bottom-center"
+            >
+              <div
+                role="menu"
+                aria-label="Viewer settings"
+                className="rounded-xl border border-border bg-white p-1.5 shadow-[0_12px_32px_rgba(17,17,17,0.14)]"
+              >
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={pinned}
+                  onClick={togglePin}
+                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[#f4f3fc]"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border"
+                    style={
+                      pinned
+                        ? { backgroundColor: "#4A3FB5", borderColor: "#4A3FB5", color: "#ffffff" }
+                        : { borderColor: "#c9c8d3", color: "transparent" }
+                    }
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                  <span className="leading-snug">
+                    <span className="block text-sm font-semibold text-[#1d1d1b]">
+                      Pin floating bars
+                    </span>
+                    <span className="block text-xs text-muted">
+                      Keep the controls from tucking away while you read.
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </PortalPopover>
+          </div>
 
           {/* One-time hint that the controls auto-hide. Subtle, non-blocking,
               and fades out on its own (instant under reduced motion). */}
@@ -910,11 +1167,12 @@ export default function FloatingViewer({
               <CommentsPanel
                 slideLabel={safeIndex + 1}
                 isStub={false}
-                flag={null}
+                flag={currentSlideFlag}
                 comments={currentSlideComments}
                 canComment={canComment}
                 canCurate={canCurate}
                 readOnly={readOnly}
+                isOrphanDeck={isOrphanDeck}
                 currentUserId={currentUserId}
                 loginHref={loginHref}
                 onAdd={(body) =>
@@ -925,11 +1183,52 @@ export default function FloatingViewer({
                 onDelete={deleteComment}
                 onDismiss={dismissComment}
                 onEdit={editComment}
-                onFlagDismiss={async () => {}}
+                onFlagDismiss={dismissFlag}
                 onClose={() => setCommentsPanelOpen(false)}
                 translucent
               />
             </div>
+          )}
+
+          {/* Rail SLIVER (design system §3.2/§4.1) — the rail's persistent
+              collapsed state on the left edge. Always visible (so the team's
+              comment activity never fully disappears): a slim rounded strip of
+              teal dots, one per slide that has comments. Hover, tap, or press
+              `T` opens the full thumbnail rail. Hidden only while that full rail
+              is open (it takes the sliver's place). */}
+          {!stripOpen && deckId && hasItems && (
+            <button
+              type="button"
+              onClick={() => {
+                setStripOpen(true);
+                reveal();
+              }}
+              onMouseEnter={() => {
+                setStripOpen(true);
+                reveal();
+              }}
+              aria-label="Open the slides rail"
+              title="Slides (T)"
+              className="group absolute left-2 top-[84px] bottom-16 z-20 flex w-[14px] flex-col items-center justify-center gap-1.5 overflow-hidden rounded-full border border-black/[0.06] bg-white/70 backdrop-blur-md shadow-[0_6px_22px_rgba(0,0,0,0.10)] transition-colors hover:bg-white"
+            >
+              {commentedSlides.length > 0 ? (
+                commentedSlides.slice(0, 12).map((slideIndex) => (
+                  <span
+                    key={slideIndex}
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: "#0F6E56" }}
+                  />
+                ))
+              ) : (
+                // No comments yet — a faint grip so the sliver still reads as an
+                // openable handle.
+                <span
+                  aria-hidden="true"
+                  className="h-6 w-0.5 rounded-full bg-black/15"
+                />
+              )}
+            </button>
           )}
 
           {/* Thumbnail strip — a FLOATING vertical panel on the LEFT (opposite

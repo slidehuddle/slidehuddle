@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { copyText } from "./copy-text";
 import PortalPopover from "@/components/PortalPopover";
+import AnchoredToast from "@/components/AnchoredToast";
 
 // "Send to Claude" — a Google-style split button: one continuous amber shape
 // with a primary action on the left and a dropdown chevron on the right,
@@ -24,6 +25,11 @@ import PortalPopover from "@/components/PortalPopover";
 // match the rest of the deck actions, with a light purple tint on hover. The
 // two portions are split by a thin purple hairline so it still reads as one
 // button with a dropdown affordance.
+//
+// Colour rule (founder decision, 2026-06-14): the Send-to-AI button is PURPLE.
+// Purple names "an action I take", and invoking the AI is one. Amber is reserved
+// for the AI's own VOICE (its feed posts, the "Queued/Sent to AI" chips, its
+// avatar) — never for the button that triggers it.
 const PURPLE = "#4A3FB5";
 const PURPLE_TINT = "#EEEDFE";
 const DIVIDER = "rgba(74,63,181,0.30)";
@@ -158,7 +164,7 @@ export default function SendToClaudeButton({
 
   return (
     <div className="relative">
-      {/* One continuous amber shape. The rounded container clips both ends and
+      {/* One continuous purple shape. The rounded container clips both ends and
           a hairline divider sits between the two portions, so it reads as a
           single button with a dropdown affordance — not two buttons. */}
       <div
@@ -282,30 +288,30 @@ export default function SendToClaudeButton({
         </div>
       </PortalPopover>
 
-      {/* Transient toasts, mirroring Copy link's pattern. One confirms a manual
-          copy; the other explains what the primary action just did. */}
-      <div
-        role="status"
-        aria-hidden={!copiedLabel}
-        className={`pointer-events-none absolute right-0 top-full mt-1.5 z-10 inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] text-white shadow-lg transition-opacity duration-300 ${
-          copiedLabel ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-        <span>{copiedLabel} copied</span>
-      </div>
+      {/* Transient toasts, on the TOP layer via AnchoredToast (portaled to
+          <body>), so they're never hidden behind a floating panel/pill. One
+          confirms a manual copy; the other explains what the primary action
+          just did. */}
+      <AnchoredToast anchorRef={containerRef} open={!!copiedLabel} maxWidth={220}>
+        <div
+          role="status"
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] text-white shadow-lg"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>{copiedLabel} copied</span>
+        </div>
+      </AnchoredToast>
 
-      <div
-        role="status"
-        aria-hidden={!sendMsg}
-        className={`pointer-events-none absolute right-0 top-full mt-1.5 z-10 max-w-[280px] rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] leading-snug text-white shadow-lg transition-opacity duration-300 ${
-          sendMsg ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        {sendMsg}
-      </div>
+      <AnchoredToast anchorRef={containerRef} open={!!sendMsg} maxWidth={280}>
+        <div
+          role="status"
+          className="rounded-md bg-[#1D1D1B] px-2.5 py-1.5 text-[11px] leading-snug text-white shadow-lg"
+        >
+          {sendMsg}
+        </div>
+      </AnchoredToast>
     </div>
   );
 }

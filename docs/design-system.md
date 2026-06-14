@@ -1,7 +1,9 @@
 # SlideHuddle — Brand & Product Design System
-## v2 · The Floating Canvas direction
+## v2.1 · The Floating Canvas direction
 
 *Supersedes §5 (Viewer UI) of the Project Brief and updates §4 (Brand). Codifies the June 2026 redesign ("focus on the content; navigation expands only when needed"), incorporates the design review of 12 June, and serves as the reference for P1.1 (floating viewer completion), the feed build, and all mockups. June 2026.*
+
+*v2.1 (2026-06-14): colour rule refined — **purple names actions you take** (including the Send-to-AI button), **amber names the AI's own voice** (its posts, chips, avatar). See §2.2. NB: the v2 mockup (`mockups-v2.html`) still paints Send to AI amber and Comments as a filled pill — it predates this refinement and will be refreshed separately; where the mockup and this rule disagree, this rule wins.*
 
 ---
 
@@ -29,13 +31,13 @@ Colour names the actor. This is SlideHuddle's most distinctive visual asset and 
 
 | Colour | Hex (core / mid / light) | Means | Used for |
 |---|---|---|---|
-| **Purple** | #4A3FB5 / #6C5CE7 / #E9E7FB | **You & the product** | Brand mark, primary actions (Share, Send in composer), active/selected states, thread pins, version ownership |
+| **Purple** | #4A3FB5 / #6C5CE7 / #E9E7FB | **You & the product** — actions you take | Brand mark, primary actions (Share, **Send to AI**, Send in composer), active/selected states, thread pins, version ownership |
 | **Teal/Green** | #0B5C47 / #3FA784 / #DCF2EA | **The team** | Comments button & counts, quote borders, decision badges, presence, requested-slide stubs, unread signals |
-| **Amber** | #7A4708 / #C77D11 / #F8E9CF | **The AI** | **Send to AI** (restored — see §10), AI avatar & posts, "Queued for AI" chips, revision events |
+| **Amber** | #7A4708 / #C77D11 / #F8E9CF | **The AI's own voice** | AI avatar & posts, "Queued for AI" / "Sent to AI" chips, AI revision events — **not** the button that invokes the AI (pressing Send to AI is *your* action → purple) |
 | Neutral | ink #141413 · grey #46443F · line #DDDCD4 · soft #F4F3EF · bg #FAFAF8 | Structure | Surfaces, text, dividers; dark ink for overlays (popover, counter) |
 | Danger | #791F1F on #FCEBEB | Destructive | Removal flags, delete confirms |
 
-Rules: never use an actor colour decoratively; never let a redesign strip an actor's colour from its most important action (the June build's white "Send to AI" pill violated this — corrected to amber); one actor colour per element.
+Rules: never use an actor colour decoratively; one actor colour per element. **Purple marks actions you take; amber marks the AI's voice** — so the *button* that sends to the AI is purple (it's your action), while the AI's *posts, chips, and avatar* are amber. *(Refined 2026-06-14: an earlier draft put the Send-to-AI button in amber; corrected — colour follows who acts, and pressing Send to AI is something you do.)*
 
 ### 2.3 Typography
 
@@ -60,13 +62,13 @@ Outline icons, 1.5px stroke, 14–16px in pills. Every icon in persistent chrome
 ### 3.2 Layout grammar
 
 - **The stage**: the full-bleed base layer. Background `#FAFAF8` letterboxing when the slide's aspect doesn't fill.
-- **Pills** (single-purpose, top corners): brand pill top-left (logo + wordmark; on deck surfaces it extends with deck title + version chip). Action cluster top-right, ordered by actor: Huddlers (team) · **Send to AI** (amber) · **Comments** (green) · **Share** (purple).
+- **Pills** (single-purpose, top corners): brand pill top-left (logo + wordmark; on deck surfaces it extends with deck title + version chip). Action cluster top-right, ordered **Send to AI · Comments · Share**, with hierarchy carried by *weight, not colour*: **Share** is the only filled button (purple — the everyday primary action); **Send to AI** is a calm purple-outline split button; **Comments** is the lightest — a bare teal icon + count (it only toggles the panel, so it isn't styled as an action). The Huddlers/identity cluster sits to their left.
 - **Rails** (left edge): the vertical thumbnail rail, floating, numbered, with comment-count badges (teal) and requested-slide stubs (dashed teal). Two states: **open** (≈112px wide incl. padding) and **sliver** (≈14px: a slim rounded strip showing only badge dots — the team's fingerprints never fully disappear).
 - **Panels** (right edge): comments / threads / the feed-peek. ≈300–340px, full-height floating card, internally scrolling. One panel open at a time on desktop.
 - **Persistent layer**: slide counter (bottom-centre dark pill) and the rail sliver. These never hide.
 - **Overlay layer**: the selection popover (dark ink pill: "＋ Start thread | ❝ Quote"), toasts, and modal panels (Claude queue) over a 40% ink scrim.
 
-**Spacing & depth tokens**: edge gap 16px (12px ≤1280w) · gap between floating elements 12px · pill radius 14px · panel radius 16px · shadows `0 10px 30px rgba(20,20,19,.10)` pills / `0 18px 50px rgba(20,20,19,.14)` panels · borders 1px #DDDCD4 on all floating surfaces (shadow alone is not enough on light slides). Z-order: stage 0 · rails/panels 10 · pills 20 · popover/toast 30 · modal+scrim 40.
+**Spacing & depth tokens**: edge gap 16px (12px ≤1280w) · gap between floating elements 12px · pill radius 14px · panel radius 16px · shadows `0 10px 30px rgba(20,20,19,.10)` pills / `0 18px 50px rgba(20,20,19,.14)` panels · borders 1px #DDDCD4 on all floating surfaces (shadow alone is not enough on light slides). Z-order: stage 0 · rails/panels 10 · pills 20 · popover/toast 30 · modal+scrim 40. **Fixed rule: toasts always render on the top layer** — portaled to `<body>` above every panel, pill, and popover, so a confirmation can never be occluded by overlapping chrome. Floating popovers/menus clamp to the viewport (flip or shift on-screen) so a panel opened near a screen edge — e.g. the "Request a slide" form on a low thumbnail — never spills off-viewport with its action button unreachable.
 
 ### 3.3 Inset math (the acceptance rule, concretely)
 
@@ -96,8 +98,8 @@ The **catch-up ribbon** (purple-tinted gradient pill, top of feed/panel: "Since 
 
 - **Brand pill**: logo square + "SlideHuddle". Deck surfaces append: title (truncate at ~38ch) + version chip (teal tint, "v6 ▾" opens history).
 - **Huddler cluster**: stacked avatars + "3 Huddlers"; live presence = teal dot ring. Guests render with their domain initial; anonymous viewers are never shown to others.
-- **Send to AI**: amber filled split control — label "✦ Send to AI · N" + chevron (clipboard fallback, copy MCP URL). Disabled = soft pill "No feedback yet". This control is amber in every state.
-- **Comments / Feed button**: deep-green filled, count badge.
+- **Send to AI**: purple-outline split control (white fill, purple border + text) — label "✦ Send to AI · N" + chevron (clipboard fallback, copy MCP URL). Disabled = soft neutral pill "No feedback yet". Purple, not amber: it's an action you take (§2.2).
+- **Comments / Feed button**: a quiet **bare teal icon + count** (speech-bubble + number) at rest — *not* a filled button, since it only toggles the panel. Light-green wash on hover; when the panel is **open** it fills solid green with a white icon + count — a clear ON state.
 - **Share**: purple filled.
 - **Thumbnail rail**: numbered thumbs; active = 2px purple border + light ring; teal corner count badges; stub = dashed teal "Requested"; "+" insert on hover between thumbs; sliver state shows dot-badges only.
 - **Comments panel / feed**: white cards on the panel; author + relative time; owner hover-curation controls (36px dark-grey squares: pencil Edit, thumbs-down Dismiss, label beneath) — unchanged from the established curation design; dismissed = struck + "Won't send to AI · Restore".
@@ -115,7 +117,7 @@ The **catch-up ribbon** (purple-tinted gradient pill, top of feed/panel: "Since 
 1. **Dashboard** — a page, not a canvas: cards on `#FAFAF8`, but the same pill header grammar. Leads with **Needs you** (owner's queue: approvals, AI revisions to review), then My huddles, then Shared with me. Inbox mental model.
 2. **Huddle feed** — the conversation is the content layer: feed column centred, deck **peek** as the right floating panel, huddle list as the left rail. Same grammar, inverted priorities.
 3. **Deck viewer** — the June redesign, with §3.3 applied. The slide is the stage; rail left (sliver default), comments/threads panel right, selection popover for anchoring.
-4. **Claude queue** — modal panel over the scrimmed stage; included-by-default items with hover curation; amber split send; footer promise: "Claude will post v4 into the huddle — same link, history kept, decisions credited."
+4. **Claude queue** — modal panel over the scrimmed stage; included-by-default items with hover curation; **purple** split send (it's a Send-to-AI action — §2.2); footer promise: "Claude will post v4 into the huddle — same link, history kept, decisions credited."
 5. **Client / guest view** — the agency's stage: their logo and name lead, SlideHuddle recedes to the footer ("Reviewed on SlideHuddle" — the viral-loop credit). Deck + one obvious comment box (no account wall to view) + Decisions log tab + review deadline. "3 reviewing", never "Huddlers".
 6. **Mobile** — floating panels become **bottom sheets**; the feed is the home surface; composer thumb-reach; counter and catch-up chip persist. No hover states: curation controls appear on tap-hold.
 
@@ -142,7 +144,7 @@ The floating grammar maps one-to-one onto the conversation-first roadmap: today'
 ## 10. Punch list from the 12 June design review (→ P1.1)
 
 1. **Occlusion (must-fix):** implement §3.3 inset — currently the rail covers slide content in both reviewed screenshots. Acceptance: rail + panel open, full slide visible.
-2. **Amber restored to Send to AI** (was white/purple in the June build).
+2. ~~**Amber restored to Send to AI**~~ — **superseded 2026-06-14.** Send to AI is **purple** (an action you take); amber is reserved for the AI's own voice — its posts, chips, and avatar. See §2.2.
 3. **Z-index glitch on the recipient view**: deck title renders behind/through the brand pill — fix layering per §3.2 z-order.
 4. **Brand-pill device icon**: remove (or give it a job and a tooltip).
 5. **Persistence policy**: implement the rail sliver + always-on counter per §4.1 (replaces blanket auto-hide).

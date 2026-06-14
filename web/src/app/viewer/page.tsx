@@ -306,9 +306,14 @@ export default async function ViewerPage({
   // floating viewer + stored decks, so the current viewer's behaviour and
   // round-trips are completely unchanged.
   let participants: DeckParticipant[] = [];
-  if (useFloatingViewer && source === "stored" && id && canSeeCollaboratorEmails) {
+  // "N reviewing" count for the anonymous guest chip — a COUNT ONLY, never
+  // identities. Computed for every floating-viewer stored-deck view; the full
+  // participant rows (with emails) are still gated to signed-in viewers below.
+  let reviewingCount = 0;
+  if (useFloatingViewer && source === "stored" && id) {
     const loaded = await getDeckParticipants(id, deckOwnerId);
-    participants = loaded.rows;
+    reviewingCount = loaded.rows.length;
+    if (canSeeCollaboratorEmails) participants = loaded.rows;
   }
 
   // Arrival activity — "N comments since you were here" — for the floating
@@ -333,6 +338,10 @@ export default async function ViewerPage({
     return (
       <main className="flex-1 flex min-h-0 overflow-hidden">
         <FloatingViewer
+          // Remount on version switch (and after a live "Load vN" refresh) so
+          // comments/flags/stubs re-seed from the server's per-version data —
+          // mirrors the classic viewer's key.
+          key={`${viewerDeckId ?? "none"}:v${viewingVersion}`}
           rawHtml={html}
           deckId={viewerDeckId}
           deckTitle={deckTitle}
@@ -351,16 +360,23 @@ export default async function ViewerPage({
           // with identities. Computed server-side ONLY for signed-in viewers
           // (anonymous link-holders get [] — no names/emails ever reach them).
           participants={participants}
+          // "N reviewing" count for the anonymous guest chip (count only — no
+          // identities ever reach an anonymous viewer).
+          reviewingCount={reviewingCount}
           // "N comments since you were here" banner data — only for returning
           // signed-in viewers with new comments; null otherwise (no banner).
           arrivalActivity={arrivalActivity}
           // Requested slides shown in the strip + navigation for ALL viewers —
           // email-redacted for anonymous viewers, same as the current viewer.
           initialStubs={viewerStubs}
-          // Removal flags are not shown in the floating viewer; they're only an
-          // input to the owner-only "Send to AI" prompt, so send them to the
-          // owner alone (others get []).
-          initialFlags={isOwner ? initialFlags : []}
+          // Removal flags — seed for the flag-for-removal UI AND the owner's
+          // "Send to AI" prompt. Same redaction as the classic viewer:
+          // `flagged_by` emails are nulled for anonymous viewers (viewerFlags),
+          // and flags are hidden on historical views.
+          initialFlags={viewerFlags}
+          // Orphan deck → show a "ask the creator to claim it" nudge instead of
+          // a comment/flag composer that would silently fail at the DB.
+          isOrphanDeck={isOrphanDeck}
           loginHref={loginHref}
         />
       </main>
