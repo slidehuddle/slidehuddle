@@ -91,12 +91,16 @@ export default function VersionSpineEvent({
     return parts.length ? `addressed ${parts.join(", ")}` : "";
   })();
 
+  // Past-version messages (everything before the current round) read as
+  // "settled": the whole event — provenance colour, avatar/AI mark, and the
+  // thumbnail strip — desaturates, so only the CURRENT version keeps its amber ✦
+  // / purple vN. Hover returns it to colour for readability. (P1.2 Item A.)
   return (
     <div
       className={
         isCurrent
           ? "rounded-xl px-3 py-2.5"
-          : "px-1 py-1.5"
+          : "px-1 py-1.5 transition [filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
       }
       style={isCurrent ? { backgroundColor: "#f1eff9" } : undefined}
     >

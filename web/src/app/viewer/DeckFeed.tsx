@@ -410,6 +410,14 @@ export default function DeckFeed({
                             deckOwnerId={deckOwnerId}
                             currentUserId={currentUserId}
                             selected={selectedKey === item.key}
+                            // "Settled": an addressed/dismissed item in a PAST
+                            // round desaturates; unaddressed items (no addressedIn
+                            // & not dismissed) keep their colour so live threads
+                            // pop. The current round never mutes. (P1.2 Item A.)
+                            muted={
+                              !round.isCurrent &&
+                              (item.addressedIn != null || isItemDismissed(item))
+                            }
                             onSelect={() => selectItem(item)}
                             onAddressedClick={scrollToVersion}
                           />
@@ -521,6 +529,14 @@ function StatRow({ label, color }: { label: string; color: string }) {
       {label}
     </span>
   );
+}
+
+// Whether a conversation item is dismissed ("Won't action") — the per-type
+// dismissed flag, used (with addressedIn) to decide the "settled" muting.
+function isItemDismissed(item: ConvItem): boolean {
+  if (item.kind === "comment") return item.comment.dismissed;
+  if (item.kind === "stub") return item.stub.dismissed;
+  return item.flag.dismissed;
 }
 
 // Short label for a resolved item in a version's "see changes" list.

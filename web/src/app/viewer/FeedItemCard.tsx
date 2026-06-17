@@ -220,6 +220,7 @@ export default function FeedItemCard({
   deckOwnerId,
   currentUserId,
   selected,
+  muted = false,
   onSelect,
   onAddressedClick,
 }: {
@@ -231,6 +232,10 @@ export default function FeedItemCard({
   /** The signed-in viewer's id — adds a "(you)" tag next to their own name. */
   currentUserId: string | null;
   selected: boolean;
+  /** "Settled" — an addressed/dismissed item in a PAST round. Desaturates the
+   *  whole card (avatar, chips, thumbnail, text) so live threads pop; hover or
+   *  selection returns it to colour. Decided upstream in DeckFeed. */
+  muted?: boolean;
   onSelect: () => void;
   /** Jump to the version that addressed this item (the "✓ Addressed in vN" tag). */
   onAddressedClick?: (version: number) => void;
@@ -328,6 +333,10 @@ export default function FeedItemCard({
       }}
       className={`flex cursor-pointer flex-col gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition-all sm:flex-row ${
         selected ? "ring-2 ring-brand" : "border border-border hover:border-black/20"
+      } ${
+        muted && !selected
+          ? "[filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
+          : ""
       }`}
       style={kind === "flag" ? { borderLeft: "3px solid #C2410C" } : undefined}
     >
