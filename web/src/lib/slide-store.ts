@@ -96,6 +96,10 @@ export type StoreSlidesOptions = {
   userId?: string | null;
   /** Claude conversation the deck was captured from (claude.ai/chat/<id>). */
   conversationId?: string | null;
+  /** Which AI produced this version: "claude" | "chatgpt" | "other" | null.
+   *  Captured at create/update time (extension → "claude"; MCP → derived from
+   *  the OAuth client). null = unknown → the feed shows a generic "AI". */
+  source?: string | null;
 };
 
 export type StoreSlidesResult = { id: string; title: string | null };
@@ -148,6 +152,7 @@ export async function storeSlides(
     title,
     slideCount,
     createdBy: options.userId ?? null,
+    source: options.source ?? null,
     tolerateMissingTable: true,
   });
   return { id, title };
@@ -165,20 +170,39 @@ async function snapshotVersion(
     title: string | null;
     slideCount: number | null;
     createdBy: string | null;
+    /** Which AI produced this version (provenance); null = unknown. */
+    source?: string | null;
     tolerateMissingTable?: boolean;
   },
 ): Promise<void> {
-  const { error } = await supabase.from("deck_versions").upsert(
-    {
-      deck_id: args.deckId,
-      version: args.version,
-      html_content: args.html,
-      title: args.title,
-      slide_count: args.slideCount,
-      created_by: args.createdBy,
-    },
-    { onConflict: "deck_id,version", ignoreDuplicates: true },
-  );
+  const baseRow = {
+    deck_id: args.deckId,
+    version: args.version,
+    html_content: args.html,
+    title: args.title,
+    slide_count: args.slideCount,
+    created_by: args.createdBy,
+  };
+  // Include `source` when we have one; if the column hasn't been migrated yet
+  // (docs/deck-versions-source-migration.sql), retry without it so versioning
+  // keeps working — same graceful pattern as the conversation-id column.
+  const run = (withSource: boolean) =>
+    supabase.from("deck_versions").upsert(
+      // Cast keeps TS happy: the generated types don't know `source` yet (same
+      // pattern as the claude_conversation_id column); it's still sent at runtime.
+      (withSource
+        ? { ...baseRow, source: args.source ?? null }
+        : baseRow) as typeof baseRow,
+      { onConflict: "deck_id,version", ignoreDuplicates: true },
+    );
+  let { error } = await run(args.source != null);
+  if (error && args.source != null && isMissingColumnError(error)) {
+    console.warn(
+      "[slide-store] deck_versions.source column missing — snapshotting without " +
+        "provenance. Run docs/deck-versions-source-migration.sql.",
+    );
+    ({ error } = await run(false));
+  }
   if (error) {
     if (args.tolerateMissingTable && isMissingTableError(error)) {
       console.warn(
@@ -250,6 +274,7 @@ export async function updateDeck(
     title: newTitle,
     slideCount: newSlideCount,
     createdBy: options.userId ?? null,
+    source: options.source ?? null,
   });
 
   const { error: updErr } = await supabase
@@ -278,24 +303,43 @@ export type DeckVersionRow = {
   slide_count: number | null;
   created_by: string | null;
   created_at: string;
+  /** Which AI produced this version ("claude" | "chatgpt" | "other"); null =
+   *  unknown (pre-migration / pre-provenance versions). */
+  source: string | null;
 };
 
 // Version history for a deck (newest first), WITHOUT the heavy html_content
-// payload. For the future history UI. Returns [] if the table is missing.
+// payload. Returns [] if the table is missing.
 export async function getDeckVersions(
   deckId: string,
 ): Promise<ListLoad<DeckVersionRow>> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("deck_versions")
-    .select("id, deck_id, version, title, slide_count, created_by, created_at")
-    .eq("deck_id", deckId)
-    .order("version", { ascending: false });
+  const baseCols = "id, deck_id, version, title, slide_count, created_by, created_at";
+  // Select `source` when present; pre-migration the column doesn't exist, so on
+  // a missing-column error retry without it (rows then carry source = null). The
+  // `: string` annotation stops the typed select-parser from rejecting `source`
+  // before the column lands in the generated types.
+  const run = (withSource: boolean) => {
+    const cols: string = withSource ? `${baseCols}, source` : baseCols;
+    return supabase
+      .from("deck_versions")
+      .select(cols)
+      .eq("deck_id", deckId)
+      .order("version", { ascending: false });
+  };
+  let { data, error } = await run(true);
+  if (error && isMissingColumnError(error)) {
+    ({ data, error } = await run(false));
+  }
   if (error) {
     logDbError("versions fetch failed", error);
     return { rows: [], failed: true };
   }
-  return { rows: (data ?? []) as DeckVersionRow[], failed: false };
+  const rows = (data ?? []) as unknown as { source?: string | null }[];
+  return {
+    rows: rows.map((r) => ({ ...r, source: r.source ?? null })) as DeckVersionRow[],
+    failed: false,
+  };
 }
 
 // Load a deck's stored HTML. Distinguishes three cases so the viewer can tell a
@@ -936,6 +980,61 @@ export async function getCommentsForDeck(
   };
 }
 
+// Like getCommentsForDeck, but spanning EVERY version of the deck. The
+// conversation feed (P1.2) is a single chronological stream across the whole
+// deck history, so it can't be scoped to one version the way the per-slide
+// comments panel is. Same explicit access check (own the deck OR a shared_decks
+// row) and the same trustworthy author-email re-resolution as the version-scoped
+// loader. Ordered OLDEST-first by created_at so the feed reads top → bottom like
+// a chat transcript. Returns [] for anonymous / no-access viewers (a legitimate
+// empty state, not a failure). Each row keeps its own `version` + `slide_index`,
+// so the feed can label a comment "Slide 4 · v2".
+export async function getAllCommentsForDeck(
+  deckId: string,
+  userId: string | null,
+): Promise<ListLoad<CommentRow>> {
+  if (!userId) return { rows: [], failed: false };
+  const supabase = getSupabaseAdmin();
+  const [{ data: ownsDeck }, { data: hasShare }] = await Promise.all([
+    supabase
+      .from("decks")
+      .select("id")
+      .eq("id", deckId)
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase
+      .from("shared_decks")
+      .select("deck_id")
+      .eq("deck_id", deckId)
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
+  if (!ownsDeck && !hasShare) return { rows: [], failed: false };
+
+  const { data, error } = await supabase
+    .from("comments")
+    .select(
+      "id, deck_id, user_id, author_email, slide_index, body, created_at, version, dismissed, owner_edited_body",
+    )
+    .eq("deck_id", deckId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    logDbError("all comments fetch failed", error);
+    return { rows: [], failed: true };
+  }
+  const rows = (data ?? []) as CommentRow[];
+  const authorEmails = await getOwnerEmails(
+    rows.map((r) => r.user_id).filter((id): id is string => !!id),
+  );
+  return {
+    rows: rows.map((r) => ({
+      ...r,
+      author_email: authorEmails[r.user_id] ?? r.author_email,
+    })),
+    failed: false,
+  };
+}
+
 // Owner-only curation of a comment: toggle `dismissed` and/or set the owner's
 // edited text. Only the DECK OWNER may do this (the original author's `body` is
 // never touched). Mirrors deleteStub's "verify deck, enforce ownership with the
@@ -1252,21 +1351,28 @@ export type StubRow = {
   /** Owner curation: owner's edited description sent to Claude (overrides the
    *  composed title/subtitle/body line). null = unedited. */
   owner_edited_body: string | null;
+  /** When a deck revision addressed this request (set by clearAddressedFeedback).
+   *  null = still open. Optional because most callers don't select it. Loaded by
+   *  getStubsForDeck only when `includeResolved` is set (the feed). */
+  resolved_at?: string | null;
 };
 
 export async function getStubsForDeck(
   deckId: string,
+  opts: { includeResolved?: boolean } = {},
 ): Promise<ListLoad<StubRow>> {
   const supabase = getSupabaseAdmin();
-  const cols =
+  const baseCols =
     "id, deck_id, position, title, subtitle, body, requested_by, created_at, dismissed, owner_edited_body";
-  // Only OPEN requested slides (resolved_at IS NULL) — resolved ones are kept
-  // for audit but no longer shown as outstanding. `filterOpen` lets us drop the
-  // filter if the resolved_at column hasn't been migrated yet (graceful
-  // fallback: pre-migration this behaves exactly as before).
-  const run = (filterOpen: boolean) => {
+  // By default only OPEN requested slides (resolved_at IS NULL) — resolved ones
+  // are kept for audit. The FEED passes includeResolved to ALSO load resolved
+  // ones (shown struck-through "✓ Addressed in vN"). `withResolved` selects +
+  // filters on the column; on a missing-column error (pre-migration) we retry
+  // without it — graceful, and then everything reads as open.
+  const run = (withResolved: boolean) => {
+    const cols: string = withResolved ? `${baseCols}, resolved_at` : baseCols;
     let q = supabase.from("slide_stubs").select(cols).eq("deck_id", deckId);
-    if (filterOpen) q = q.is("resolved_at", null);
+    if (withResolved && !opts.includeResolved) q = q.is("resolved_at", null);
     return q
       .order("position", { ascending: true })
       .order("created_at", { ascending: true });
@@ -1281,13 +1387,16 @@ export async function getStubsForDeck(
     logDbError("stubs fetch failed", error);
     return { rows: [], failed: true };
   }
-  const rows = (data ?? []) as Omit<StubRow, "requested_by_email">[];
+  const rows = (data ?? []) as unknown as (Omit<StubRow, "requested_by_email"> & {
+    resolved_at?: string | null;
+  })[];
   const emails = await getOwnerEmails(
     rows.map((r) => r.requested_by).filter((id): id is string => !!id),
   );
   return {
     rows: rows.map((r) => ({
       ...r,
+      resolved_at: r.resolved_at ?? null,
       requested_by_email: r.requested_by ? emails[r.requested_by] ?? null : null,
     })),
     failed: false,
@@ -1438,19 +1547,26 @@ export type FlagRow = {
   /** Owner curation: owner's edited removal reason sent to Claude. null =
    *  unedited (the original flagger's reason stays in `reason`). */
   owner_edited_reason: string | null;
+  /** When a deck revision addressed this flag (set by clearAddressedFeedback).
+   *  null = still open. Optional; loaded by getFlagsForDeck only when
+   *  `includeResolved` is set (the feed). */
+  resolved_at?: string | null;
 };
 
 export async function getFlagsForDeck(
   deckId: string,
+  opts: { includeResolved?: boolean } = {},
 ): Promise<ListLoad<FlagRow>> {
   const supabase = getSupabaseAdmin();
-  const cols =
+  const baseCols =
     "id, deck_id, slide_index, reason, flagged_by, created_at, dismissed, owner_edited_reason";
-  // Only OPEN flags (resolved_at IS NULL); resolved ones are kept for audit.
-  // Drop the filter if the column isn't migrated yet (graceful fallback).
-  const run = (filterOpen: boolean) => {
+  // By default only OPEN flags; the FEED passes includeResolved to ALSO load
+  // resolved ones (shown struck-through). Drop the column entirely if it isn't
+  // migrated yet (graceful fallback → everything reads as open).
+  const run = (withResolved: boolean) => {
+    const cols: string = withResolved ? `${baseCols}, resolved_at` : baseCols;
     let q = supabase.from("slide_flags").select(cols).eq("deck_id", deckId);
-    if (filterOpen) q = q.is("resolved_at", null);
+    if (withResolved && !opts.includeResolved) q = q.is("resolved_at", null);
     return q.order("created_at", { ascending: true });
   };
   let { data, error } = await run(true);
@@ -1463,13 +1579,16 @@ export async function getFlagsForDeck(
     logDbError("flags fetch failed", error);
     return { rows: [], failed: true };
   }
-  const rows = (data ?? []) as Omit<FlagRow, "flagged_by_email">[];
+  const rows = (data ?? []) as unknown as (Omit<FlagRow, "flagged_by_email"> & {
+    resolved_at?: string | null;
+  })[];
   const emails = await getOwnerEmails(
     rows.map((r) => r.flagged_by).filter((id): id is string => !!id),
   );
   return {
     rows: rows.map((r) => ({
       ...r,
+      resolved_at: r.resolved_at ?? null,
       flagged_by_email: r.flagged_by ? emails[r.flagged_by] ?? null : null,
     })),
     failed: false,

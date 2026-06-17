@@ -14,6 +14,7 @@ import {
   editStubFieldsAction,
   setStubCurationAction,
 } from "./actions";
+import { track } from "@/lib/analytics";
 import type { StubRow } from "@/lib/slide-store";
 
 type Params = {
@@ -126,6 +127,8 @@ export function useDeckStubs({
       requested_by_email: currentUserEmail,
     };
     setStubs((prev) => [...prev, row]);
+    // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
+    track("feedback_added", { deckId, kind: "stub" });
     return row.id;
   }
 

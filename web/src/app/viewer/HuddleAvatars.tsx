@@ -1,32 +1,34 @@
 "use client";
 
 import type { DeckParticipant } from "@/lib/slide-store";
+import Avatar from "./Avatar";
 
-// The "N Huddlers" people cluster for the floating viewer: a count of everyone
-// in the deck's huddle (owner + collaborators + commenters) plus small stacked
-// avatars. This is "who's involved", NOT live "who's viewing now". Identities
-// (emails) arrive only for signed-in viewers — an anonymous link-holder is shown
-// a generic chip elsewhere and never receives this list, so it's safe to render
-// the emails here as escaped text.
+// The "N Huddlers" people cluster for the floating viewer + the feed top bar: a
+// count of everyone in the deck's huddle (owner + collaborators + commenters)
+// plus small stacked avatars. This is "who's involved", NOT live "who's viewing
+// now". Identities (emails) arrive only for signed-in viewers — an anonymous
+// link-holder is shown a generic chip elsewhere and never receives this list.
 //
-// The COUNT includes everyone in the huddle (you included — you're a huddler
-// too), but the AVATAR STACK shows only the OTHER people: your own face is
-// already the account avatar sitting right beside this cluster, so repeating it
-// here would be redundant. Rendered in the deck's teal collaboration colour;
-// a participant who has left a comment carries a small comment marker.
+// The COUNT includes everyone in the huddle (you included), but the AVATAR STACK
+// shows only the OTHER people: your own face is the account avatar sitting right
+// beside this cluster, so repeating it here would be redundant. Each avatar now
+// carries the shared two-signal system (shape = role, colour = person) via the
+// <Avatar> component, so the owner reads as a filled purple disc and each
+// collaborator keeps their own stable colour — here and in the feed.
 
 const MAX_SHOWN = 4;
-
-function initialFor(p: DeckParticipant): string {
-  return (p.email?.trim()?.[0] ?? "?").toUpperCase();
-}
 
 export default function HuddleAvatars({
   participants,
   currentUserId,
+  ownerId,
 }: {
   participants: DeckParticipant[];
   currentUserId: string | null;
+  /** The deck's owner id (decks.user_id) — handed straight to <Avatar>, which is
+   *  the single place that decides filled (owner) vs outline (collaborator). The
+   *  cluster does NOT compute ownership itself, so it can't disagree with the feed. */
+  ownerId: string | null;
 }) {
   // Everyone except you — your own avatar is the account menu next to this.
   const others = participants.filter((p) => p.userId !== currentUserId);
@@ -36,7 +38,6 @@ export default function HuddleAvatars({
   const total = participants.length; // the whole huddle, you included
   const shown = others.slice(0, MAX_SHOWN);
   const overflow = others.length - shown.length;
-  // Plain, escaped text for the tooltip / screen-reader label — never HTML.
   const roster = others.map((p) => p.email ?? "a teammate").join(", ");
   const word = `Huddler${total === 1 ? "" : "s"}`;
   const label = `${total} ${word}`;
@@ -56,16 +57,15 @@ export default function HuddleAvatars({
         {shown.map((p, i) => (
           <span
             key={p.userId}
-            title={p.email ?? "a teammate"}
-            className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold select-none ring-2 ring-white transition-shadow hover:ring-[#5DCAA5]"
-            style={{
-              marginLeft: i === 0 ? 0 : -8,
-              ...(p.isOwner
-                ? { backgroundColor: "#0F6E56", color: "#ffffff" }
-                : { backgroundColor: "#E1F5EE", color: "#085041" }),
-            }}
+            className="relative inline-flex rounded-full ring-2 ring-white"
+            style={{ marginLeft: i === 0 ? 0 : -8 }}
           >
-            {initialFor(p)}
+            <Avatar
+              userId={p.userId}
+              ownerId={ownerId}
+              email={p.email}
+              size={32}
+            />
             {p.commented && (
               <span
                 aria-hidden="true"

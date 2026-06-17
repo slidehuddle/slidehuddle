@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { setFlagCurationAction } from "./actions";
+import { track } from "@/lib/analytics";
 import type { FlagRow } from "@/lib/slide-store";
 
 type Params = {
@@ -116,6 +117,8 @@ export function useDeckFlags({
       flagged_by_email: currentUserEmail,
     };
     setFlags((prev) => (prev.some((f) => f.id === row.id) ? prev : [...prev, row]));
+    // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
+    track("feedback_added", { deckId, kind: "flag" });
   }
 
   // Remove your own flag (RLS: flagger only). Optimistic with revert.

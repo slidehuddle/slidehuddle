@@ -40,7 +40,7 @@ import {
   selectCuratedFeedback,
   buildFeedbackPrompt,
 } from "@/app/viewer/feedback-prompt";
-import { parseAccessToken } from "@/lib/mcp-oauth";
+import { parseAccessToken, parseClientId } from "@/lib/mcp-oauth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { minifyDeckHtmlForRead } from "@/lib/minify-deck-html";
 
@@ -82,7 +82,14 @@ const MAX_LIST_DECKS = (() => {
 })();
 
 // What we stash in the verified token's `extra`, recovered inside each tool.
-type AuthExtra = { userId: string; email: string | null; origin: string };
+// `clientId` rides on AuthInfo itself (set in the auth wrapper), not in extra —
+// we surface it here so create/update can record WHICH AI produced a version.
+type AuthExtra = {
+  userId: string;
+  email: string | null;
+  origin: string;
+  clientId: string | null;
+};
 
 function getAuthExtra(authInfo: AuthInfo | undefined): AuthExtra | null {
   const extra = authInfo?.extra as Partial<AuthExtra> | undefined;
@@ -91,7 +98,24 @@ function getAuthExtra(authInfo: AuthInfo | undefined): AuthExtra | null {
     userId: extra.userId,
     email: typeof extra.email === "string" ? extra.email : null,
     origin: typeof extra.origin === "string" ? extra.origin : "",
+    clientId: typeof authInfo?.clientId === "string" ? authInfo.clientId : null,
   };
+}
+
+// Best-effort AI provenance from the OAuth client that registered this token.
+// We map the client's self-reported name + registered redirect URIs to a known
+// source; if we can't recognise it we return null (the feed then shows a
+// generic "AI") — never guess/attribute a specific AI we can't verify.
+function aiSourceFromClient(clientId: string | null): string | null {
+  if (!clientId) return null;
+  const parsed = parseClientId(clientId);
+  if (!parsed) return null;
+  const hay = [parsed.clientName ?? "", ...parsed.redirectUris]
+    .join(" ")
+    .toLowerCase();
+  if (hay.includes("claude") || hay.includes("anthropic")) return "claude";
+  if (hay.includes("chatgpt") || hay.includes("openai")) return "chatgpt";
+  return null; // a recognised MCP client we just don't have a name for → generic "AI"
 }
 
 function textResult(text: string, isError = false) {
@@ -267,6 +291,7 @@ const handler = createMcpHandler(
         try {
           const { id, title: storedTitle } = await storeSlides(html, {
             userId: auth.userId,
+            source: aiSourceFromClient(auth.clientId),
           });
           const shareUrl = `${auth.origin}/viewer?id=${id}`;
           const finalTitle = storedTitle ?? title ?? "Untitled";
@@ -420,6 +445,7 @@ const handler = createMcpHandler(
         try {
           const { version, title } = await updateDeck(deckId, html, {
             userId: auth.userId,
+            source: aiSourceFromClient(auth.clientId),
           });
           // The revision was made in response to the deck's feedback, so mark
           // the items it addressed (requested slides + flags) as RESOLVED — the

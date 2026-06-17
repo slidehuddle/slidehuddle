@@ -216,7 +216,10 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
-      const { version, title } = await updateDeck(updateId, html);
+      // The extension captures from claude.ai, so the producing AI is Claude.
+      const { version, title } = await updateDeck(updateId, html, {
+        source: "claude",
+      });
       // The revision was made in response to the deck's feedback, so mark the
       // items it addressed (requested slides + flags) as RESOLVED — the record
       // is kept (auditable) but they stop showing as open, so they aren't
@@ -268,7 +271,12 @@ export async function POST(request: NextRequest) {
   let id: string;
   let title: string | null;
   try {
-    ({ id, title } = await storeSlides(html, { userId, conversationId }));
+    // Captured via the claude.ai extension → the producing AI is Claude.
+    ({ id, title } = await storeSlides(html, {
+      userId,
+      conversationId,
+      source: "claude",
+    }));
   } catch (err) {
     console.error("[/api/slides] store failed:", err);
     return NextResponse.json(

@@ -38,6 +38,7 @@ import StubSlideView from "./StubSlideView";
 import SlideFlagControl from "./SlideFlagControl";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
 import HuddleAvatars from "./HuddleAvatars";
+import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import ArrivalBanner from "./ArrivalBanner";
 import type { ArrivalActivity } from "./arrival-activity";
 import { useDeckComments } from "./useDeckComments";
@@ -46,6 +47,7 @@ import { useDeckFlags } from "./useDeckFlags";
 import { useDeckVersionWatch } from "./useDeckVersionWatch";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
+import { track, identifyUser } from "@/lib/analytics";
 import AvatarMenu from "@/components/AvatarMenu";
 import PortalPopover from "@/components/PortalPopover";
 import type {
@@ -115,72 +117,16 @@ type Props = {
    *  creator claims it — gates comment/flag/stub creation off and shows a nudge. */
   isOrphanDeck: boolean;
   loginHref: string;
+  /** Whether this viewer is a design partner — analytics segmentation only.
+   *  Lets the feed-vs-deck landing comparison be split by partner. */
+  isPartner: boolean;
+  /** Real-slide index (0-based) to open ON, from the feed's "Open slide N"
+   *  deep-link (?slide=N). null = open at the start. */
+  initialSlideIndex?: number | null;
+  /** The deck's owner id (decks.user_id) — passed to the Huddlers cluster so
+   *  <Avatar> alone decides who's filled (owner) vs outline (collaborator). */
+  deckOwnerId: string | null;
 };
-
-// Generic, name-free "huddle" indicator for ANONYMOUS link viewers. They never
-// receive participant identities (privacy rule), but should still sense the deck
-// is collaborative — so they get this static chip with no names, no count, no
-// emails. Signed-in viewers get the real <HuddleAvatars> instead.
-function SharedDeckChip() {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap"
-      style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
-      title="This deck is shared for collaboration"
-    >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-      Shared deck
-    </span>
-  );
-}
-
-// Guest/recipient "N reviewing" chip for ANONYMOUS link viewers (design system
-// §6.5/§10.6: client surfaces soften to "3 reviewing", never "Huddlers"). They
-// receive only the COUNT — never names or emails — so this is privacy-safe. The
-// count is the people in the huddle (owner + collaborators + commenters), the
-// same set the signed-in HuddleAvatars cluster shows. Teal = the team.
-function ReviewingChip({ count }: { count: number }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap"
-      style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
-      title={`${count} ${count === 1 ? "person is" : "people are"} reviewing this deck`}
-    >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-      {count} reviewing
-    </span>
-  );
-}
 
 // The slides/thumbnails toggle icon: three 16:9 slide thumbnails stacked, the
 // middle one highlighted (the current slide). Inert placeholder for now.
@@ -274,8 +220,33 @@ export default function FloatingViewer({
   initialStubs,
   isOrphanDeck,
   loginHref,
+  isPartner,
+  initialSlideIndex,
+  deckOwnerId,
 }: Props) {
   const router = useRouter();
+
+  // Landing analytics — fire ONCE. This + the feed's matching event are the
+  // Phase-1 gate evidence ("which landing do partners use"). Counts come from the
+  // server-seeded data (the state at landing).
+  const landingFiredRef = useRef(false);
+  useEffect(() => {
+    if (landingFiredRef.current) return;
+    landingFiredRef.current = true;
+    const role = isOwner ? "owner" : currentUserId ? "collaborator" : "anon";
+    if (currentUserId) identifyUser(currentUserId, { isPartner });
+    track("deck_landing_viewed", {
+      deckId,
+      view: "deck",
+      role,
+      isPartner,
+      commentCount: initialComments.length,
+      stubCount: initialStubs.length,
+      flagCount: initialFlags.length,
+    });
+    // Fire once on mount; deps captured intentionally at landing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // parseDeck uses DOMParser, which only exists in the browser. Keep the
   // initial render empty so SSR is safe, then parse on the client after mount —
   // identical to how SlideViewer.tsx handles it.
@@ -362,6 +333,23 @@ export default function FloatingViewer({
       setFocusStubId(null);
     }
   }, [focusStubId, displayItems]);
+
+  // Open ON the slide the feed deep-linked to (?slide=N → "Open slide N"). Fires
+  // ONCE, after the deck has parsed and the real slide appears in displayItems
+  // (the slide index → its display-item index, since stubs shift positions).
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkAppliedRef.current) return;
+    if (initialSlideIndex == null || initialSlideIndex < 0) return;
+    const idx = displayItems.findIndex(
+      (it) => it.kind === "slide" && it.slideIndex === initialSlideIndex,
+    );
+    if (idx >= 0) {
+      deepLinkAppliedRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveIndex(idx);
+    }
+  }, [initialSlideIndex, displayItems]);
 
   // ── Reveal / collapse (Phase 2) ──────────────────────────────────────────
   // `expanded` = full controls; otherwise the minimal resting set. We start
@@ -857,6 +845,7 @@ export default function FloatingViewer({
                       <HuddleAvatars
                         participants={participants}
                         currentUserId={currentUserId}
+                        ownerId={deckOwnerId}
                       />
                     ) : reviewingCount >= 1 ? (
                       <ReviewingChip count={reviewingCount} />
@@ -864,7 +853,11 @@ export default function FloatingViewer({
                       <SharedDeckChip />
                     )}
                     {currentUserEmail ? (
-                      <AvatarMenu email={currentUserEmail} />
+                      <AvatarMenu
+                        email={currentUserEmail}
+                        userId={currentUserId}
+                        ownerId={deckOwnerId}
+                      />
                     ) : (
                       <Link
                         href={loginHref}
@@ -932,7 +925,11 @@ export default function FloatingViewer({
                 </span>
               </>
             ) : currentUserEmail ? (
-              <AvatarMenu email={currentUserEmail} />
+              <AvatarMenu
+                email={currentUserEmail}
+                userId={currentUserId}
+                ownerId={deckOwnerId}
+              />
             ) : (
               <Link
                 href={loginHref}

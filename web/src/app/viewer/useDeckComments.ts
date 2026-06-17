@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { setCommentCurationAction } from "./actions";
+import { track } from "@/lib/analytics";
 import type { CommentRow } from "@/lib/slide-store";
 
 type Params = {
@@ -144,6 +145,8 @@ export function useDeckComments({
         ? withoutTemp
         : [...withoutTemp, real];
     });
+    // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
+    track("feedback_added", { deckId, kind: "comment" });
   }
 
   // Delete a comment (author only — enforced by RLS). Optimistic with revert.

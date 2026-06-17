@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import PostHogProvider from "./PostHogProvider";
 
 const plusJakarta = Plus_Jakarta_Sans({
   variable: "--font-jakarta",
@@ -24,7 +25,7 @@ export default function RootLayout({
       className={`${plusJakarta.variable} h-full antialiased`}
     >
       <body className="h-full flex flex-col">
-        {children}
+        <PostHogProvider>{children}</PostHogProvider>
       </body>
     </html>
   );

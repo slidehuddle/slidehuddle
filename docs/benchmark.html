@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlideHuddle — Competitive Benchmark</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --purple:#4A3FB5; --purple-lt:#E9E7FB; --purple-mid:#6C5CE7;
+    --teal:#0B5C47; --teal-mid:#3FA784; --teal-lt:#DCF2EA;
+    --amber:#7A4708; --amber-mid:#C77D11; --amber-lt:#F8E9CF;
+    --ink:#141413; --grey:#46443F; --line:#DDDCD4;
+    --bg:#FFFFFF; --card:#FFFFFF; --soft:#F4F3EF;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:'Plus Jakarta Sans',sans-serif;
+    background:var(--bg); color:var(--ink);
+    display:flex; align-items:center; justify-content:center;
+    min-height:100vh; padding:22px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .deck{width:100%; max-width:1240px;}
+  .stage{
+    position:relative; width:100%; aspect-ratio:16/9;
+    background:var(--card); border:1px solid var(--line); border-radius:18px;
+    box-shadow:0 14px 40px rgba(20,20,19,0.09), 0 2px 6px rgba(20,20,19,0.05);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0; padding:50px 58px 44px;
+    display:none; flex-direction:column;
+    animation:fade .4s ease;
+  }
+  .slide.active{display:flex;}
+  @keyframes fade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+
+  .s-head{display:flex; align-items:center; gap:12px; margin-bottom:16px;}
+  .s-num{font-size:14px; font-weight:700; color:var(--purple); letter-spacing:.04em;}
+  .s-kicker{font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--grey);}
+  .s-kicker::before{content:"";display:inline-block;width:20px;height:2px;background:var(--purple);vertical-align:middle;margin-right:9px;opacity:.5;}
+  .s-title{font-size:38px; font-weight:700; line-height:1.12; letter-spacing:-0.015em; margin-bottom:10px; color:var(--ink);}
+  .s-sub{font-size:17px; color:var(--grey); line-height:1.5; max-width:780px; font-weight:500;}
+  .s-body{flex:1; margin-top:22px;}
+
+  .logo-mark{position:absolute; bottom:24px; left:58px; display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; color:var(--purple);}
+  .logo-sq{width:16px;height:16px;border-radius:4px;background:var(--purple);}
+
+  /* Title slide */
+  .title-slide{justify-content:center;}
+  .title-logo{position:absolute;top:50px;left:58px;display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;color:var(--purple);}
+  .title-logo-sq{width:21px;height:21px;border-radius:6px;background:var(--purple);}
+  .title-kicker{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--grey);display:block;margin-bottom:18px;}
+  .title-big{font-size:66px;font-weight:800;line-height:1.03;letter-spacing:-0.025em;color:var(--ink);margin-bottom:22px;}
+  .title-sub{font-size:19px;color:var(--grey);line-height:1.5;max-width:700px;font-weight:500;margin-bottom:36px;}
+  .title-themes{display:flex;gap:26px;font-size:13.5px;font-weight:600;color:var(--grey);}
+  .title-themes span{display:inline-flex;align-items:center;gap:8px;}
+  .title-themes i{width:12px;height:12px;border-radius:4px;display:inline-block;}
+
+  /* Slide table */
+  .bm{width:100%; border-collapse:collapse; font-size:15px;}
+  .bm th, .bm td{text-align:left; padding:13px 13px; border-bottom:1px solid var(--line); vertical-align:middle;}
+  .bm thead th{font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--grey); font-weight:700; border-bottom:2px solid var(--ink);}
+  .bm thead th span{font-weight:500;color:var(--grey);font-size:11px;text-transform:none;letter-spacing:0;}
+  .bm .cap{font-weight:600; color:var(--ink); width:32%; font-size:15px;}
+  .bm td{color:var(--grey);font-weight:600;font-size:13px;}
+  .bm .sh-col{background:var(--purple-lt);}
+  .bm thead .sh-col{color:var(--purple);font-size:13px;}
+  tbody tr:first-child .sh-col{border-top-left-radius:10px;border-top-right-radius:10px;}
+  tbody tr:last-child .sh-col{border-bottom-left-radius:10px;border-bottom-right-radius:10px;}
+  .dot{display:inline-block;width:14px;height:14px;border-radius:50%;vertical-align:middle;}
+  .full{background:var(--teal);}
+  .half{background:var(--teal-mid);}
+  .none{background:#C6C5BD;}
+  .full-p{background:var(--purple);}
+  .sh-col span:not(.dot){color:var(--purple);font-weight:600;}
+  .legend{display:flex; gap:22px; margin-top:18px; font-size:13px; color:var(--grey); font-weight:600; align-items:center;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;}
+
+  /* Slide 2 */
+  .mcp-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:18px;}
+  .mcp{border:1.5px solid var(--line); border-radius:14px; padding:22px; display:flex; flex-direction:column;}
+  .mcp-tag{display:inline-flex; align-items:center; align-self:flex-start; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:5px 12px; border-radius:20px; margin-bottom:15px;}
+  .mcp-name{font-size:23px; font-weight:700; margin-bottom:5px;}
+  .mcp-role{font-size:14px; color:var(--grey); margin-bottom:16px; line-height:1.45; font-weight:500;}
+  .mcp-list{list-style:none; font-size:14.5px; color:var(--ink); line-height:1.5; font-weight:500;}
+  .mcp-list li{padding-left:18px; position:relative; margin-bottom:9px;}
+  .mcp-list li::before{content:""; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--teal-mid);}
+  .mcp-foot{margin-top:auto; padding-top:15px; font-size:13px; font-weight:600; line-height:1.4;}
+  .amber-zone{background:var(--amber-lt); color:var(--amber);}
+  .teal-zone{background:var(--teal-lt); color:var(--teal);}
+  .purple-zone{background:var(--purple-lt); color:var(--purple);}
+  .takeaway{margin-top:20px; padding:15px 18px; background:var(--soft); border-left:4px solid var(--amber-mid); border-radius:8px; font-size:15px; color:var(--ink); line-height:1.5; font-weight:500;}
+  .takeaway b{font-weight:700;}
+
+  /* Slide 3 */
+  .paths{display:flex; flex-direction:column; gap:14px;}
+  .path{display:grid; grid-template-columns:34px 1fr 250px; gap:18px; align-items:center; padding:16px 18px; border:1.5px solid var(--line); border-radius:12px;}
+  .path-n{width:30px;height:30px;border-radius:50%;background:var(--purple);color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .path-route{font-size:16.5px; font-weight:700; margin-bottom:3px; color:var(--ink);}
+  .path-desc{font-size:13.5px; color:var(--grey); line-height:1.45; font-weight:500;}
+  .path-miss{font-size:13px; color:var(--amber); background:var(--amber-lt); padding:10px 13px; border-radius:8px; line-height:1.4; font-weight:500;}
+  .path-miss b{font-weight:700;}
+
+  /* Slide moat */
+  .moat-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px;}
+  .moat{padding:16px 18px; border-radius:14px; border:1.5px solid var(--line);}
+  .moat.key{border-color:var(--purple); border-width:2px; background:var(--purple-lt);}
+  .moat-h{font-size:16.5px; font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:9px; color:var(--ink);}
+  .moat-d{font-size:13.5px; color:var(--grey); line-height:1.45; font-weight:500;}
+  .moat.key .moat-d{color:#3A3470;}
+  .badge-uniq{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#fff; background:var(--purple); padding:3px 9px; border-radius:10px;}
+  .icon{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;}
+  .moat-def{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);display:flex;align-items:center;gap:9px;font-size:12px;color:var(--grey);font-weight:500;line-height:1.35;}
+  .moat.key .moat-def{border-top-color:rgba(74,63,181,.22);}
+  .def-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;border-radius:5px;flex-shrink:0;}
+  .def-high{background:var(--teal);color:#fff;}
+  .def-med{background:var(--amber-lt);color:var(--amber);}
+  .bottom-line{padding:15px 20px; background:var(--ink); color:#fff; border-radius:12px; font-size:15px; line-height:1.5; font-weight:500;}
+  .bottom-line b{color:var(--teal-mid); font-weight:700;}
+
+  .nav{display:flex; align-items:center; justify-content:center; gap:18px; margin-top:18px;}
+  .nav button{border:none; background:#fff; width:42px; height:42px; border-radius:50%; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.10); font-size:18px; color:var(--purple); transition:transform .15s;}
+  .nav button:hover{transform:scale(1.08);}
+  .nav button:disabled{opacity:.35; cursor:default; transform:none;}
+  .dots{display:flex; gap:8px;}
+  .dots span{width:9px;height:9px;border-radius:50%;background:#C6C5BD;cursor:pointer;transition:all .2s;}
+  .dots span.on{background:var(--purple);width:24px;border-radius:5px;}
+  .counter{font-size:13px;color:var(--grey);font-weight:600;min-width:56px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="deck">
+  <div class="stage" id="stage">
+
+    <!-- TITLE -->
+    <section class="slide active title-slide">
+      <div class="title-logo"><span class="title-logo-sq"></span> SlideHuddle</div>
+      <div>
+        <span class="title-kicker">Strategy brief</span>
+        <h1 class="title-big">Competitive<br>Benchmark</h1>
+        <p class="title-sub">How SlideHuddle compares to AI slide tools, MCP servers and the alternatives — and where its defensible moat lies.</p>
+        <div class="title-themes">
+          <span><i style="background:var(--purple)"></i> Product &amp; actions</span>
+          <span><i style="background:var(--teal)"></i> Team collaboration</span>
+          <span><i style="background:var(--amber-mid)"></i> AI</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- BENCHMARK -->
+    <section class="slide">
+      <div class="s-head"><span class="s-num">02 / 05</span><span class="s-kicker">The benchmark</span></div>
+      <h1 class="s-title">Where SlideHuddle sits in the landscape</h1>
+      <p class="s-sub">AI slide tools collaborate inside their own walls. Add-ins live inside Google Slides and PowerPoint. Raw AI generates beautifully but can't gather a team. SlideHuddle is the collaboration and curation layer on top of the AI you already use.</p>
+      <div class="s-body">
+        <table class="bm">
+          <thead>
+            <tr>
+              <th class="cap">Capability</th>
+              <th>Standalone AI tools<br><span>Gamma, Pitch</span></th>
+              <th>AI add-ins<br><span>Plus AI</span></th>
+              <th>Raw AI chat<br><span>Claude, ChatGPT</span></th>
+              <th class="sh-col">SlideHuddle</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="cap">Strong AI generation</td><td><span class="dot full"></span></td><td><span class="dot full"></span></td><td><span class="dot full"></span></td><td class="sh-col"><span class="dot full-p"></span> uses your AI</td></tr>
+            <tr><td class="cap">Renders the AI's actual output faithfully</td><td><span class="dot none"></span></td><td><span class="dot none"></span></td><td><span class="dot full"></span></td><td class="sh-col"><span class="dot full-p"></span></td></tr>
+            <tr><td class="cap">Team comments on specific slides</td><td><span class="dot full"></span></td><td><span class="dot full"></span></td><td><span class="dot none"></span></td><td class="sh-col"><span class="dot full-p"></span></td></tr>
+            <tr><td class="cap">Structured feedback sent back to the AI</td><td><span class="dot half"></span></td><td><span class="dot half"></span></td><td><span class="dot none"></span> manual</td><td class="sh-col"><span class="dot full-p"></span></td></tr>
+            <tr><td class="cap">Owner curates feedback before the AI</td><td><span class="dot none"></span></td><td><span class="dot none"></span></td><td><span class="dot none"></span></td><td class="sh-col"><span class="dot full-p"></span> unique</td></tr>
+            <tr><td class="cap">Works with the AI you already use</td><td><span class="dot none"></span></td><td><span class="dot half"></span></td><td><span class="dot full"></span></td><td class="sh-col"><span class="dot full-p"></span></td></tr>
+          </tbody>
+        </table>
+        <div class="legend">
+          <span><span class="dot full"></span> Full</span>
+          <span><span class="dot half"></span> Partial</span>
+          <span><span class="dot none"></span> None</span>
+          <span><span class="dot full-p"></span> SlideHuddle strength</span>
+        </div>
+      </div>
+      <div class="logo-mark"><span class="logo-sq"></span> SlideHuddle</div>
+    </section>
+
+    <!-- MCP -->
+    <section class="slide">
+      <div class="s-head"><span class="s-num">03 / 05</span><span class="s-kicker">The MCP landscape</span></div>
+      <h1 class="s-title">The plumbing already exists</h1>
+      <p class="s-sub">Miro, PowerPoint and Google Slides all have MCP servers that connect directly to Claude. Creating, editing — and sometimes commenting on — slides is increasingly a commodity.</p>
+      <div class="s-body">
+        <div class="mcp-grid">
+          <div class="mcp">
+            <span class="mcp-tag teal-zone">Official</span>
+            <div class="mcp-name">Miro</div>
+            <div class="mcp-role">Official MCP server, connectable inside Claude.</div>
+            <ul class="mcp-list">
+              <li>Create boards, diagrams, sticky notes</li>
+              <li>Summarise and search boards</li>
+              <li>Built for whiteboards &amp; workshops</li>
+            </ul>
+            <div class="mcp-foot teal-zone" style="padding:10px 13px;border-radius:8px;">Not slide decks — a different surface</div>
+          </div>
+          <div class="mcp">
+            <span class="mcp-tag amber-zone">Many servers</span>
+            <div class="mcp-name">PowerPoint</div>
+            <div class="mcp-role">Community + hosted MCPs (e.g. SlideForge).</div>
+            <ul class="mcp-list">
+              <li>Generate &amp; edit real .pptx files</li>
+              <li>Templates, shapes, charts</li>
+              <li>AI iterates on its own output</li>
+            </ul>
+            <div class="mcp-foot amber-zone" style="padding:10px 13px;border-radius:8px;">Creation-focused — no team comments</div>
+          </div>
+          <div class="mcp">
+            <span class="mcp-tag purple-zone">Closest fit</span>
+            <div class="mcp-name">Google Slides</div>
+            <div class="mcp-role">Many MCPs; some expose native comments.</div>
+            <ul class="mcp-list">
+              <li>Create &amp; update presentations</li>
+              <li>Read, reply to &amp; resolve comments</li>
+              <li>Closest to a feedback loop today</li>
+            </ul>
+            <div class="mcp-foot purple-zone" style="padding:10px 13px;border-radius:8px;">But template-flattened &amp; no curation</div>
+          </div>
+        </div>
+        <div class="takeaway"><b>Takeaway:</b> "Connect the AI to slides" is no longer defensible — the plumbing is commoditising fast. The value has to live somewhere the MCPs don't reach.</div>
+      </div>
+      <div class="logo-mark"><span class="logo-sq"></span> SlideHuddle</div>
+    </section>
+
+    <!-- REPLICATION -->
+    <section class="slide">
+      <div class="s-head"><span class="s-num">04 / 05</span><span class="s-kicker">Replication risk</span></div>
+      <h1 class="s-title">How someone could replicate it</h1>
+      <p class="s-sub">Three plausible paths a competitor could take — and the specific gap each one leaves open.</p>
+      <div class="s-body">
+        <div class="paths">
+          <div class="path">
+            <div class="path-n">1</div>
+            <div>
+              <div class="path-route">Google Slides + a comment-enabled MCP</div>
+              <div class="path-desc">Claude creates a Google Slides deck, the team comments natively, Claude reads the comments back and revises.</div>
+            </div>
+            <div class="path-miss"><b>Misses:</b> flattens Claude's HTML into rigid templates; no owner curation — every comment hits the AI raw.</div>
+          </div>
+          <div class="path">
+            <div class="path-n">2</div>
+            <div>
+              <div class="path-route">Standalone tools deepen their AI loop</div>
+              <div class="path-desc">Gamma or Pitch extend their own collaboration with tighter AI iteration inside their walled garden.</div>
+            </div>
+            <div class="path-miss"><b>Misses:</b> locks you into their generator — won't work with the AI and context you already use.</div>
+          </div>
+          <div class="path">
+            <div class="path-n">3</div>
+            <div>
+              <div class="path-route">The AI platforms close the loop themselves</div>
+              <div class="path-desc">Claude or ChatGPT add native team review and feedback to their own slide output.</div>
+            </div>
+            <div class="path-miss"><b>Misses:</b> the slowest path, still no curation vocabulary — the real long-term watch-item.</div>
+          </div>
+        </div>
+      </div>
+      <div class="logo-mark"><span class="logo-sq"></span> SlideHuddle</div>
+    </section>
+
+    <!-- MOAT -->
+    <section class="slide">
+      <div class="s-head"><span class="s-num">05 / 05</span><span class="s-kicker">The moat</span></div>
+      <h1 class="s-title">Where SlideHuddle can defend</h1>
+      <p class="s-sub">No single pillar is uncopyable. Defensibility comes from combining them — and from the feedback data that compounds with every round of use.</p>
+      <div class="s-body">
+        <div class="moat-grid">
+          <div class="moat">
+            <div class="moat-h"><span class="icon teal-zone">◍</span> Faithful rendering</div>
+            <div class="moat-d">Pixel-perfect display of the AI's real output — not flattened into someone else's templates.</div>
+            <div class="moat-def"><span class="def-tag def-med">Medium</span> Copyable, but means rejecting the template model rivals are built on.</div>
+          </div>
+          <div class="moat">
+            <div class="moat-h"><span class="icon teal-zone">＋</span> Structured feedback vocabulary</div>
+            <div class="moat-d">Comments, requested stub slides, and removal flags — a language the AI acts on cleanly.</div>
+            <div class="moat-def"><span class="def-tag def-med">Medium</span> The feature is copyable; the design judgment behind it is the hard part.</div>
+          </div>
+          <div class="moat key">
+            <div class="moat-h"><span class="icon" style="background:var(--purple);color:#fff;">✎</span> Owner-as-editor curation <span class="badge-uniq">unique</span></div>
+            <div class="moat-d">The human filter — the owner edits or dismisses feedback before it reaches the AI.</div>
+            <div class="moat-def"><span class="def-tag def-high">High</span> Novel — absent from every competitor and MCP today.</div>
+          </div>
+          <div class="moat">
+            <div class="moat-h"><span class="icon amber-zone">✦</span> AI-agnostic</div>
+            <div class="moat-d">One layer across Claude, ChatGPT and Grok via MCP — not tied to a single generator.</div>
+            <div class="moat-def"><span class="def-tag def-med">Medium</span> Rivals are single-generator by business model, not easily reversed.</div>
+          </div>
+        </div>
+        <div class="bottom-line">Individually each pillar is copyable. <b>Together — and compounded by the feedback data you accumulate every round — they form a moat that widens with use.</b></div>
+      </div>
+      <div class="logo-mark"><span class="logo-sq"></span> SlideHuddle</div>
+    </section>
+
+  </div>
+
+  <div class="nav">
+    <button id="prev" aria-label="Previous slide">‹</button>
+    <div class="dots" id="dots"></div>
+    <span class="counter" id="counter">1 / 5</span>
+    <button id="next" aria-label="Next slide">›</button>
+  </div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsWrap=document.getElementById('dots');
+  const counter=document.getElementById('counter');
+  const prev=document.getElementById('prev');
+  const next=document.getElementById('next');
+  let i=0;
+  slides.forEach((_,n)=>{const d=document.createElement('span');d.onclick=()=>go(n);dotsWrap.appendChild(d);});
+  const dots=[...dotsWrap.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    counter.textContent=(i+1)+' / '+slides.length;
+    prev.disabled=i===0; next.disabled=i===slides.length-1;
+  }
+  prev.onclick=()=>go(i-1); next.onclick=()=>go(i+1);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' ')go(i+1);
+    if(e.key==='ArrowLeft')go(i-1);
+  });
+  go(0);
+</script>
+</body>
+</html>
