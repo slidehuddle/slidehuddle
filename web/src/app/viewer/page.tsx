@@ -47,7 +47,9 @@ function floatingViewerDefault(): boolean {
 // allowlist (a global default would put EVERYONE on the feed; the brief wants
 // the feed default-on for partners only, deck for everyone else). FEED_PARTNER_EMAILS
 // is a comma-separated list of emails; a signed-in viewer whose email is on it
-// LANDS on the feed by default. ?view=feed / ?view=deck always override per-URL.
+// LANDS on the feed by default. The wildcard "*" means EVERY signed-in viewer
+// lands on the feed (anonymous link-holders still get the deck). ?view=feed /
+// ?view=deck always override per-URL.
 // A true per-account/admin toggle rides with P2 workspaces/profiles.
 function feedPartnerEmails(): string[] {
   return (process.env.FEED_PARTNER_EMAILS ?? "")
@@ -334,9 +336,14 @@ export default async function ViewerPage({
   //   ?view=deck/classic/floating → deck (the deck-flavor choice stays useFloatingViewer)
   //   no ?view                    → feed iff a signed-in partner, else deck
   // Only stored decks (real id) can have a feed; sample/param decks always deck.
+  // A signed-in viewer lands on the feed if their email is on the allowlist, OR
+  // if the allowlist contains the wildcard "*" (= every signed-in viewer → feed).
+  // Anonymous link-holders never match (no email) → always the deck.
+  const partners = feedPartnerEmails();
   const isFeedPartner = !!(
     currentUserEmail &&
-    feedPartnerEmails().includes(currentUserEmail.toLowerCase())
+    (partners.includes("*") ||
+      partners.includes(currentUserEmail.toLowerCase()))
   );
   const showFeed =
     source === "stored" &&
