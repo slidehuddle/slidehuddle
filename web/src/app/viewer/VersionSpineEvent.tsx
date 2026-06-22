@@ -17,7 +17,7 @@ import { useState } from "react";
 import Avatar from "./Avatar";
 import LazyThumbnailStrip from "./LazyThumbnailStrip";
 import { nameFromEmail } from "./FeedItemCard";
-import { formatRelativeTime } from "@/lib/relative-time";
+import RelativeTime from "./RelativeTime";
 import type { ParsedDeck } from "./parse-deck";
 
 function aiName(source: string | null): string {
@@ -79,7 +79,6 @@ export default function VersionSpineEvent({
   onSelectSlide: (slideIndex: number) => void;
 }) {
   const [showChanges, setShowChanges] = useState(false);
-  const when = formatRelativeTime(createdAt);
   const slides = slideCount != null ? `${slideCount} ${slideCount === 1 ? "slide" : "slides"}` : "";
   const creatorName = nameFromEmail(creatorEmail);
 
@@ -119,7 +118,7 @@ export default function VersionSpineEvent({
                   <span className="font-semibold">{creatorName} started this huddle</span>
                   {title ? <> · {title}</> : null}
                   {slides ? <> · {slides}</> : null}
-                  <span className="text-muted"> · {when}</span>
+                  <span className="text-muted"> · <RelativeTime iso={createdAt} /></span>
                 </p>
               ) : (
                 <p className="flex flex-wrap items-center gap-x-1.5 text-[15px] leading-snug text-[#1d1d1b]">
@@ -142,7 +141,7 @@ export default function VersionSpineEvent({
                 <p className="mt-0.5 text-xs text-muted">
                   requested by {creatorName}
                   {addressedText ? <> · {addressedText}</> : null}
-                  <> · {when}</>
+                  <> · <RelativeTime iso={createdAt} /></>
                 </p>
               )}
             </div>

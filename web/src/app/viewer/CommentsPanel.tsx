@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CommentRow, FlagRow } from "@/lib/slide-store";
-import { formatRelativeTime } from "@/lib/relative-time";
+import RelativeTime from "./RelativeTime";
 
 function CommentBody({
   body,
@@ -342,11 +342,12 @@ export default function CommentsPanel({
                     </span>
                   )}
                   <time
+                    suppressHydrationWarning
                     title={formatTime(entry.flag.created_at)}
                     className="text-xs shrink-0 ml-auto"
                     style={{ color: "#791F1F", opacity: 0.7 }}
                   >
-                    {formatRelativeTime(entry.flag.created_at)}
+                    <RelativeTime iso={entry.flag.created_at} />
                   </time>
                 </div>
                 {(entry.flag.owner_edited_reason ?? entry.flag.reason) && (
@@ -440,10 +441,11 @@ export default function CommentsPanel({
                     </span>
                   )}
                   <time
+                    suppressHydrationWarning
                     title={formatTime(entry.comment.created_at)}
                     className="text-xs text-muted shrink-0 ml-auto"
                   >
-                    {formatRelativeTime(entry.comment.created_at)}
+                    <RelativeTime iso={entry.comment.created_at} />
                   </time>
                 </div>
                 {editingId === entry.comment.id ? (

@@ -15,7 +15,7 @@
 
 import type { ParsedDeck } from "./parse-deck";
 import type { FeedItem } from "./feed-items";
-import { formatRelativeTime } from "@/lib/relative-time";
+import RelativeTime from "./RelativeTime";
 import Avatar from "./Avatar";
 
 const THUMB_W = 140;
@@ -351,7 +351,7 @@ export default function FeedItemCard({
               {tags.length > 0 && (
                 <span className="text-xs font-medium text-muted">({tags.join(" · ")})</span>
               )}
-              <span className="text-xs text-muted">· {formatRelativeTime(createdAt)}</span>
+              <span className="text-xs text-muted">· <RelativeTime iso={createdAt} /></span>
               <TypeChip kind={kind} />
             </div>
           </div>

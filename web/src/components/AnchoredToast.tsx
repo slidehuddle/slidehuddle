@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useHydrated } from "@/lib/use-hydrated";
 
 // A transient toast pinned just under an anchor element but rendered on the TOP
 // layer — portaled to <body> at a very high z-index — so it can NEVER be hidden
@@ -25,6 +26,7 @@ export default function AnchoredToast<T extends HTMLElement>({
   children: ReactNode;
 }) {
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const hydrated = useHydrated();
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +52,12 @@ export default function AnchoredToast<T extends HTMLElement>({
     };
   }, [open, anchorRef]);
 
-  if (typeof document === "undefined") return null;
+  // Gate the portal on hydration: createPortal renders nothing on the server but
+  // mounts immediately on the client, so rendering it on the first client pass
+  // would mismatch the server's null and throw a hydration error. Staying null
+  // until hydrated keeps the first client render identical to the server, then
+  // the portal mounts on the next render.
+  if (!hydrated) return null;
 
   return createPortal(
     <div
