@@ -33,18 +33,50 @@ export type AddressedSummary = {
   items: { key: string; label: string }[];
 };
 
-// The AI's mark — a distinct dark rounded SQUARE with an amber sparkle, so it
-// never reads as a person (people are circles).
-function AiMark() {
+// The AI's mark. When we know which model produced the version
+// (deck_versions.source → "claude"/"chatgpt") we show that model's official logo
+// (a static asset in web/public/logos/); otherwise — unknown source, or the logo
+// file isn't present yet — a neutral generic mark. Always a rounded SQUARE (people
+// are circles) at the same 36px footprint. The <img> onError falls back to the
+// generic mark, so a missing logo file never renders a broken image.
+function GenericAiMark() {
   return (
     <span
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
       style={{ backgroundColor: "#28282A" }}
       aria-label="AI"
     >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="#EF9F27" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#EF9F27" aria-hidden="true">
         <path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" />
       </svg>
+    </span>
+  );
+}
+
+function AiMark({ source }: { source: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const logo =
+    source === "claude"
+      ? { src: "/logos/claude.svg", label: "Claude" }
+      : source === "chatgpt"
+        ? { src: "/logos/chatgpt.svg", label: "ChatGPT" }
+        : null;
+  if (!logo || failed) return <GenericAiMark />;
+  return (
+    <span
+      className="flex h-10 w-10 shrink-0 items-center justify-center"
+      aria-label={logo.label}
+    >
+      {/* Static brand logo from web/public/logos. No box — the logo sits directly
+          on the feed, larger + more prominent. A tiny static asset doesn't need
+          next/image; on error we fall back to the generic mark. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={logo.src}
+        alt={logo.label}
+        className="h-10 w-10 object-contain"
+        onError={() => setFailed(true)}
+      />
     </span>
   );
 }
@@ -107,7 +139,7 @@ export default function VersionSpineEvent({
         {isOpening ? (
           <Avatar userId={creatorUserId} ownerId={deckOwnerId} email={creatorEmail} size={36} />
         ) : (
-          <AiMark />
+          <AiMark source={source} />
         )}
 
         <div className="min-w-0 flex-1">
@@ -123,7 +155,7 @@ export default function VersionSpineEvent({
               ) : (
                 <p className="flex flex-wrap items-center gap-x-1.5 text-[15px] leading-snug text-[#1d1d1b]">
                   <span className="font-semibold">
-                    <span style={{ color: "#854F0B" }}>✦ {aiName(source)} published</span>{" "}
+                    <span style={{ color: "#854F0B" }}>🎉 {aiName(source)} published</span>{" "}
                     <span style={{ color: "#4A3FB5" }}>v{version}</span>
                   </span>
                   {slides ? <span className="text-[#1d1d1b]"> · {slides}</span> : null}
