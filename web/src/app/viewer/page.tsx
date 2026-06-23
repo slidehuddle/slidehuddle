@@ -68,9 +68,17 @@ export default async function ViewerPage({
     v?: string;
     view?: string;
     slide?: string;
+    from?: string;
   }>;
 }) {
-  const { slides, id, source: sourceParam, v, view, slide } = await searchParams;
+  const { slides, id, source: sourceParam, v, view, slide, from } =
+    await searchParams;
+  // G1 analytics (docs/G1-MEASUREMENT.md §4): which landing this session
+  // originated on. The feed's Open-deck/Open-slide links carry ?from=feed, so a
+  // comment made after opening the deck FROM the feed is attributed surface:feed
+  // (the feed is read-only — you participate by opening the deck). Everything
+  // else is surface:deck.
+  const landingSurface: "feed" | "deck" = from === "feed" ? "feed" : "deck";
   // "Open slide N" deep-link from the feed: a 0-based real-slide index the deck
   // viewer should open on. Ignored by the feed/classic paths.
   const slideParam = slide ? parseInt(slide, 10) : NaN;
@@ -529,6 +537,8 @@ export default async function ViewerPage({
           initialSlideIndex={initialSlideIndex}
           // Deck owner id → the Huddlers cluster's <Avatar> (single owner rule).
           deckOwnerId={deckOwnerId}
+          // G1 analytics: feed-origin vs direct-deck session (?from=feed).
+          surface={landingSurface}
         />
       </main>
     );

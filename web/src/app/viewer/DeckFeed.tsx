@@ -29,7 +29,7 @@ import AvatarMenu from "@/components/AvatarMenu";
 import { buildVersionSpine, type ConvItem } from "./feed-items";
 import FeedItemCard from "./FeedItemCard";
 import VersionSpineEvent, { type AddressedSummary } from "./VersionSpineEvent";
-import { track, identifyUser } from "@/lib/analytics";
+import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import type {
   CommentRow,
   DeckParticipant,
@@ -229,21 +229,33 @@ export default function DeckFeed({
     if (firedRef.current) return;
     firedRef.current = true;
     const role = isOwner ? "owner" : currentUserId ? "collaborator" : "anon";
-    if (currentUserId) identifyUser(currentUserId, { isPartner });
+    if (currentUserId) {
+      // is_partner SUPER-property (rides every later event) + email as a PERSON
+      // property for the "Design partners" cohort (founder decision). Email is
+      // never put on individual events. (docs/G1-MEASUREMENT.md §3.)
+      registerSuperProperties({ is_partner: isPartner });
+      identifyUser(currentUserId, {
+        is_partner: isPartner,
+        email: currentUserEmail,
+      });
+    }
     track("deck_landing_viewed", {
-      deckId,
       view: "feed",
+      deck_id: deckId,
       role,
-      isPartner,
-      commentCount: comments.length,
-      stubCount: stubs.length,
-      flagCount: flags.length,
+      version: currentVersion,
+      comment_count: comments.length,
+      stub_count: stubs.length,
+      flag_count: flags.length,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onOpenDeck = () => track("feed_open_deck", { deckId });
-  const deckHref = `/viewer?id=${deckId}&view=deck`;
+  const onOpenDeck = () =>
+    track("feed_open_deck", { deck_id: deckId, from_version: currentVersion });
+  // ?from=feed marks the deck session as feed-origin, so feedback made after
+  // opening the deck from here is attributed surface:feed (docs/G1-MEASUREMENT.md §4).
+  const deckHref = `/viewer?id=${deckId}&view=deck&from=feed`;
   const openSlideHref = `${deckHref}&slide=${safePeek}`;
 
   const peekScale = PEEK_W / (deck.slideWidth || 1);

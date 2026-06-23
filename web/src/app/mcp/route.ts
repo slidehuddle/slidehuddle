@@ -43,6 +43,7 @@ import {
 import { parseAccessToken, parseClientId } from "@/lib/mcp-oauth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { minifyDeckHtmlForRead } from "@/lib/minify-deck-html";
+import { captureServer } from "@/lib/analytics-server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -443,9 +444,10 @@ const handler = createMcpHandler(
         if (invalid) return textResult(invalid, true);
 
         try {
+          const source = aiSourceFromClient(auth.clientId);
           const { version, title } = await updateDeck(deckId, html, {
             userId: auth.userId,
-            source: aiSourceFromClient(auth.clientId),
+            source,
           });
           // The revision was made in response to the deck's feedback, so mark
           // the items it addressed (requested slides + flags) as RESOLVED — the
@@ -455,6 +457,17 @@ const handler = createMcpHandler(
           // resolution hiccup must not undo the saved revision.
           const resolved = await clearAddressedFeedback(deckId);
           const resolvedCount = resolved.stubs + resolved.flags;
+          // G1 (docs/G1-MEASUREMENT.md §4): the round-boundary event. Fire-and-forget
+          // AFTER the owner-gated save + resolution — captureServer never throws and
+          // is awaited only to flush, so it can neither block nor undo the save.
+          // Attributed to the deck owner (auth.userId). Ids/counts/enum only — no
+          // slide content, comment text, emails, or tokens.
+          await captureServer("version_published", auth.userId, {
+            deck_id: deckId,
+            version,
+            source,
+            addressed_count: resolvedCount,
+          });
           const resolvedNote =
             resolvedCount > 0
               ? `\nresolved ${resolvedCount} addressed feedback item(s) ` +

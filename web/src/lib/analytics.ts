@@ -83,3 +83,19 @@ export function identifyUser(
     // ignore
   }
 }
+
+/**
+ * Register super-properties — values attached to EVERY subsequent event from
+ * this browser (e.g. `is_partner`), so events can be cohort-filtered without
+ * re-passing the flag at each call site. No-ops unless configured.
+ */
+export function registerSuperProperties(
+  properties: Record<string, unknown>,
+): void {
+  if (!enabled || typeof window === "undefined") return;
+  try {
+    posthog.register(properties);
+  } catch {
+    // ignore
+  }
+}

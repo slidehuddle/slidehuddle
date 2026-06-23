@@ -24,6 +24,10 @@ type Params = {
   /** Historical (read-only) view: no realtime, no writes. */
   readOnly: boolean;
   initialComments: CommentRow[];
+  /** G1 analytics context (docs/G1-MEASUREMENT.md §4): the landing the session
+   *  started on, and this viewer's role. Stamped onto feedback_added. */
+  surface: "feed" | "deck";
+  role: "owner" | "collaborator" | "anon";
 };
 
 const COMMENT_COLS =
@@ -36,6 +40,8 @@ export function useDeckComments({
   viewingVersion,
   readOnly,
   initialComments,
+  surface,
+  role,
 }: Params) {
   const [comments, setComments] = useState<CommentRow[]>(initialComments);
 
@@ -146,7 +152,13 @@ export function useDeckComments({
         : [...withoutTemp, real];
     });
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", { deckId, kind: "comment" });
+    track("feedback_added", {
+      kind: "comment",
+      surface,
+      deck_id: deckId,
+      version: viewingVersion,
+      role,
+    });
   }
 
   // Delete a comment (author only — enforced by RLS). Optimistic with revert.

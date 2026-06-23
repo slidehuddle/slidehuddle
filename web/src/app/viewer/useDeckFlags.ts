@@ -19,6 +19,12 @@ type Params = {
   currentUserEmail: string | null;
   readOnly: boolean;
   initialFlags: FlagRow[];
+  /** G1 analytics context (docs/G1-MEASUREMENT.md §4): the deck version in view,
+   *  the landing the session started on, and this viewer's role. Stamped onto
+   *  feedback_added (flags aren't version-scoped, so version is carried here). */
+  viewingVersion: number;
+  surface: "feed" | "deck";
+  role: "owner" | "collaborator" | "anon";
 };
 
 const FLAG_COLS =
@@ -30,6 +36,9 @@ export function useDeckFlags({
   currentUserEmail,
   readOnly,
   initialFlags,
+  viewingVersion,
+  surface,
+  role,
 }: Params) {
   const [flags, setFlags] = useState<FlagRow[]>(initialFlags);
 
@@ -118,7 +127,13 @@ export function useDeckFlags({
     };
     setFlags((prev) => (prev.some((f) => f.id === row.id) ? prev : [...prev, row]));
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", { deckId, kind: "flag" });
+    track("feedback_added", {
+      kind: "flag",
+      surface,
+      deck_id: deckId,
+      version: viewingVersion,
+      role,
+    });
   }
 
   // Remove your own flag (RLS: flagger only). Optimistic with revert.

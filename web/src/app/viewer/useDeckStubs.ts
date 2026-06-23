@@ -23,6 +23,12 @@ type Params = {
   currentUserEmail: string | null;
   readOnly: boolean;
   initialStubs: StubRow[];
+  /** G1 analytics context (docs/G1-MEASUREMENT.md §4): the deck version in view,
+   *  the landing the session started on, and this viewer's role. Stamped onto
+   *  feedback_added (stubs aren't version-scoped, so version is carried here). */
+  viewingVersion: number;
+  surface: "feed" | "deck";
+  role: "owner" | "collaborator" | "anon";
 };
 
 const STUB_COLS =
@@ -34,6 +40,9 @@ export function useDeckStubs({
   currentUserEmail,
   readOnly,
   initialStubs,
+  viewingVersion,
+  surface,
+  role,
 }: Params) {
   const [stubs, setStubs] = useState<StubRow[]>(initialStubs);
 
@@ -128,7 +137,13 @@ export function useDeckStubs({
     };
     setStubs((prev) => [...prev, row]);
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", { deckId, kind: "stub" });
+    track("feedback_added", {
+      kind: "stub",
+      surface,
+      deck_id: deckId,
+      version: viewingVersion,
+      role,
+    });
     return row.id;
   }
 

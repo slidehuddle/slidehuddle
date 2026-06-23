@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { copyText } from "./copy-text";
+import { track } from "@/lib/analytics";
 import PortalPopover from "@/components/PortalPopover";
 import AnchoredToast from "@/components/AnchoredToast";
 
@@ -68,6 +69,10 @@ type Props = {
    *  viewer's width; the floating viewer passes a narrower one to fit its
    *  shorter copy. */
   minWidthClass?: string;
+  /** Deck id for the send_to_ai_clicked analytics event (docs/G1-MEASUREMENT.md §4). */
+  deckId?: string | null;
+  /** G1 analytics surface (feed|deck) — which landing the session originated on. */
+  surface?: "feed" | "deck";
 };
 
 // The prompt is one header line followed by one line per feedback item
@@ -102,6 +107,8 @@ export default function SendToClaudeButton({
   label = "Send to Claude",
   emptyLabel = "No comments for Claude yet",
   minWidthClass = ACTION_MIN_W,
+  deckId = null,
+  surface = "deck",
 }: Props) {
   const [open, setOpen] = useState(false);
   // Label of the most recent successful copy ("Feedback" / "MCP URL"), or null.
@@ -150,6 +157,12 @@ export default function SendToClaudeButton({
 
   async function handleSend() {
     if (!feedbackText) return;
+    // G1 (docs/G1-MEASUREMENT.md §4): the owner kicking off an AI revision round.
+    track("send_to_ai_clicked", {
+      deck_id: deckId,
+      item_count: count,
+      surface,
+    });
     // Always copy first as a safety net: if the extension isn't installed (so
     // it can't auto-fill the message box), the user can still paste.
     await copyText(feedbackText);

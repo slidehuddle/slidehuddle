@@ -47,7 +47,7 @@ import { useDeckFlags } from "./useDeckFlags";
 import { useDeckVersionWatch } from "./useDeckVersionWatch";
 import { buildDisplayItems } from "./display-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
-import { track, identifyUser } from "@/lib/analytics";
+import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import AvatarMenu from "@/components/AvatarMenu";
 import PortalPopover from "@/components/PortalPopover";
 import type {
@@ -126,6 +126,11 @@ type Props = {
   /** The deck's owner id (decks.user_id) — passed to the Huddlers cluster so
    *  <Avatar> alone decides who's filled (owner) vs outline (collaborator). */
   deckOwnerId: string | null;
+  /** G1 analytics (docs/G1-MEASUREMENT.md §4): which landing this session
+   *  originated on — "feed" when the user arrived via the conversation feed's
+   *  Open-deck link (?from=feed), "deck" otherwise. Stamped onto feedback_added
+   *  + send_to_ai_clicked so feed-origin participation is measurable. */
+  surface: "feed" | "deck";
 };
 
 // The slides/thumbnails toggle icon: three 16:9 slide thumbnails stacked, the
@@ -223,8 +228,17 @@ export default function FloatingViewer({
   isPartner,
   initialSlideIndex,
   deckOwnerId,
+  surface,
 }: Props) {
   const router = useRouter();
+
+  // This viewer's role for analytics (owner / collaborator / anon). Hoisted so
+  // the landing event AND the feedback hooks share one definition.
+  const role: "owner" | "collaborator" | "anon" = isOwner
+    ? "owner"
+    : currentUserId
+      ? "collaborator"
+      : "anon";
 
   // Landing analytics — fire ONCE. This + the feed's matching event are the
   // Phase-1 gate evidence ("which landing do partners use"). Counts come from the
@@ -233,16 +247,25 @@ export default function FloatingViewer({
   useEffect(() => {
     if (landingFiredRef.current) return;
     landingFiredRef.current = true;
-    const role = isOwner ? "owner" : currentUserId ? "collaborator" : "anon";
-    if (currentUserId) identifyUser(currentUserId, { isPartner });
+    if (currentUserId) {
+      // is_partner as a SUPER-property → rides on every later event (feedback_added,
+      // send_to_ai_clicked, …) so the partner cohort is filterable. Email as a
+      // PERSON property (founder decision) → powers the "Design partners" cohort;
+      // email is never attached to individual events.
+      registerSuperProperties({ is_partner: isPartner });
+      identifyUser(currentUserId, {
+        is_partner: isPartner,
+        email: currentUserEmail,
+      });
+    }
     track("deck_landing_viewed", {
-      deckId,
       view: "deck",
+      deck_id: deckId,
       role,
-      isPartner,
-      commentCount: initialComments.length,
-      stubCount: initialStubs.length,
-      flagCount: initialFlags.length,
+      version: viewingVersion,
+      comment_count: initialComments.length,
+      stub_count: initialStubs.length,
+      flag_count: initialFlags.length,
     });
     // Fire once on mount; deps captured intentionally at landing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,6 +290,9 @@ export default function FloatingViewer({
     currentUserEmail,
     readOnly,
     initialStubs,
+    viewingVersion,
+    surface,
+    role,
   });
   const { comments, addComment, deleteComment, dismissComment, editComment } =
     useDeckComments({
@@ -276,6 +302,8 @@ export default function FloatingViewer({
       viewingVersion,
       readOnly,
       initialComments,
+      surface,
+      role,
     });
   const { flags, addFlag, removeFlag, dismissFlag } = useDeckFlags({
     deckId,
@@ -283,6 +311,9 @@ export default function FloatingViewer({
     currentUserEmail,
     readOnly,
     initialFlags,
+    viewingVersion,
+    surface,
+    role,
   });
   // Notice an out-of-band revision (e.g. the AI publishing a new version) and
   // prompt a refresh — never auto-yank the page. null until a newer version
@@ -873,6 +904,8 @@ export default function FloatingViewer({
                         minWidthClass="min-w-[208px]"
                         feedbackText={feedbackText}
                         conversationId={conversationId}
+                        deckId={deckId}
+                        surface={surface}
                       />
                     )}
                   </span>

@@ -3,12 +3,14 @@ import {
   clearAddressedFeedback,
   countSlides,
   dependsOnClaudeDesignSystem,
+  getDeckMeta,
   storeSlides,
   updateDeck,
 } from "@/lib/slide-store";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { mintDeckWriteToken, verifyDeckWriteToken } from "@/lib/update-token";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { captureServer } from "@/lib/analytics-server";
 
 // Header the extension sends a deck write token in (see lib/update-token.ts).
 // Lower-cased for case-insensitive header lookup.
@@ -229,6 +231,19 @@ export async function POST(request: NextRequest) {
       // logs-and-continues and never throws, so a resolution hiccup can never
       // undo the already-saved revision.
       const resolved = await clearAddressedFeedback(updateId);
+      // G1 (docs/G1-MEASUREMENT.md §4): the round-boundary event, mirroring the
+      // MCP update_deck path. Fire-and-forget AFTER the token-gated save +
+      // resolution — captureServer never throws and is awaited only to flush, so
+      // it can't block or undo the save. Attributed to the deck owner (best-effort
+      // lookup; orphan decks fall back to a deck-namespaced id). The extension
+      // captures from claude.ai, so source is "claude". Ids/counts/enum only.
+      const owner = (await getDeckMeta(updateId).catch(() => null))?.user_id;
+      await captureServer("version_published", owner ?? `deck:${updateId}`, {
+        deck_id: updateId,
+        version,
+        source: "claude",
+        addressed_count: resolved.stubs + resolved.flags,
+      });
       return NextResponse.json(
         {
           id: updateId,
