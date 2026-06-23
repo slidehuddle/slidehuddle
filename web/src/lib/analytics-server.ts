@@ -16,31 +16,20 @@ import { PostHog } from "posthog-node";
 
 const DEFAULT_HOST = "https://us.i.posthog.com";
 
-let client: PostHog | null = null;
-let resolved = false;
-
-// Lazily build a single client (reused across invocations). Reads the SAME
-// public project key + host the browser seam uses, so prod/EU routing matches.
-function getClient(): PostHog | null {
-  if (resolved) return client;
-  resolved = true;
-  const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-  if (!key) {
-    client = null; // not configured → stay a no-op
-    return client;
-  }
-  const host = process.env.NEXT_PUBLIC_POSTHOG_HOST || DEFAULT_HOST;
-  // flushAt:1 / flushInterval:0 → send each event promptly rather than batching,
-  // which suits low-volume, fire-once-per-save events in a serverless runtime.
-  client = new PostHog(key, { host, flushAt: 1, flushInterval: 0 });
-  return client;
-}
-
 /**
  * Record a server-side product event. `distinctId` is the Supabase user id of
  * the person the event belongs to (the deck owner, for `version_published`).
- * Awaits a flush so the event is delivered before a serverless function can
- * suspend. No-ops without a key; never throws.
+ * No-ops without a key; never throws.
+ *
+ * Delivery: we create a fresh client per call and `await shutdown()`. In a
+ * serverless runtime the function can freeze the instant it returns, killing any
+ * in-flight HTTP request. `flush()` resolves BEFORE the network send completes
+ * (with flushAt:1 the capture is already draining the queue), so a flush-only
+ * send is silently dropped on return — verified against live PostHog: a
+ * flush-only event never arrived, the same event followed by shutdown() did.
+ * `shutdown()` flushes AND awaits the in-flight request, guaranteeing delivery
+ * before we return. version_published is low-frequency, so a per-call client is
+ * cheap.
  */
 export async function captureServer(
   event: string,
@@ -48,10 +37,12 @@ export async function captureServer(
   properties?: Record<string, unknown>,
 ): Promise<void> {
   try {
-    const c = getClient();
-    if (!c) return;
-    c.capture({ distinctId, event, properties });
-    await c.flush();
+    const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    if (!key) return; // not configured → no-op
+    const host = process.env.NEXT_PUBLIC_POSTHOG_HOST || DEFAULT_HOST;
+    const client = new PostHog(key, { host, flushAt: 1, flushInterval: 0 });
+    client.capture({ distinctId, event, properties });
+    await client.shutdown();
   } catch {
     // Telemetry must never break or block the write it follows.
   }
