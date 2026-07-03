@@ -42,16 +42,24 @@ export type AddressedSummary = {
 // are circles) at the same 36px footprint. The <img> onError falls back to the
 // generic mark, so a missing logo file never renders a broken image.
 function GenericAiMark({ size = 40 }: { size?: number }) {
-  const spark = Math.round(size / 2);
+  // Soft lilac square with the brand-purple letters "AI" (founder call
+  // 2026-07-03, replacing the old dark square + amber sparkle). Still a rounded
+  // SQUARE, so it stays distinct from people (circles); purple is the AI's
+  // colour and the person palette avoids purple, so it never reads as a teammate.
   return (
     <span
-      className="flex shrink-0 items-center justify-center rounded-lg"
-      style={{ backgroundColor: "#28282A", width: size, height: size }}
+      className="flex shrink-0 items-center justify-center rounded-lg font-bold leading-none"
+      style={{
+        backgroundColor: "#ECEAFB",
+        color: "#4A3FB5",
+        width: size,
+        height: size,
+        fontSize: Math.round(size * 0.46),
+        letterSpacing: "0.01em",
+      }}
       aria-label="AI"
     >
-      <svg width={spark} height={spark} viewBox="0 0 24 24" fill="#EF9F27" aria-hidden="true">
-        <path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" />
-      </svg>
+      AI
     </span>
   );
 }
