@@ -221,11 +221,7 @@ export default function DeckFeed({
             <SharedDeckChip />
           )}
           {currentUserEmail ? (
-            <AvatarMenu
-              email={currentUserEmail}
-              userId={currentUserId}
-              ownerId={deckOwnerId}
-            />
+            <AvatarMenu email={currentUserEmail} />
           ) : (
             <Link
               href={loginHref}

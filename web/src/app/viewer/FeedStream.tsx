@@ -16,6 +16,7 @@
 
 import Link from "next/link";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -29,8 +30,9 @@ import {
   type ParsedDeck,
 } from "./parse-deck";
 import { buildVersionSpine, type ConvItem } from "./feed-items";
-import FeedItemCard from "./FeedItemCard";
-import VersionSpineEvent, { type AddressedSummary } from "./VersionSpineEvent";
+import FeedItemCard, { nameFromEmail } from "./FeedItemCard";
+import VersionSpineEvent, { aiName, type AddressedSummary } from "./VersionSpineEvent";
+import { AI_FILTER_ID } from "./HuddleFilterStack";
 import type {
   CommentRow,
   DeckParticipant,
@@ -80,6 +82,14 @@ type Props = {
     dismissStub: (id: string, dismissed: boolean) => Promise<void>;
     dismissFlag: (id: string, dismissed: boolean) => Promise<void>;
   } | null;
+  /** Huddler filter (Slice 3, spectrum only): HIDE every card NOT authored by
+   *  this person (dimming made the feed hard to navigate — founder call
+   *  2026-07-03) and show the "Showing {name}'s feedback ✕" chip. Version
+   *  spine events always stay (they're the backbone). AI_FILTER_ID hides ALL
+   *  cards → the version spine alone ("Showing {AI}'s versions").
+   *  null/omitted → no filter UI (the standalone feed). */
+  filterUserId?: string | null;
+  onClearFilter?: () => void;
   /** "Open deck" target shown in the EMPTY state (DeckFeed only). Omitted in the
    *  spectrum, where the deck is already on-screen, so the button is hidden. */
   deckHref?: string;
@@ -105,6 +115,8 @@ export default function FeedStream({
   onSelectVersionSlide,
   insert = null,
   curation = null,
+  filterUserId = null,
+  onClearFilter,
   deckHref,
   onOpenDeck,
   className = "flex-1 min-w-0 overflow-y-auto",
@@ -182,6 +194,47 @@ export default function FeedStream({
     onSelectItem?.(item, itemVersion);
   }
 
+  // ── huddler filter (Slice 3) ──────────────────────────────────────────────
+  // Who authored an item; cards by anyone else HIDE while a filter is active
+  // (AI_FILTER_ID matches nobody → all cards hide, the spine stands alone).
+  const authorOf = (it: ConvItem): string | null =>
+    it.kind === "comment"
+      ? it.comment.user_id
+      : it.kind === "stub"
+        ? it.stub.requested_by
+        : it.flag.flagged_by;
+  const itemHidden = (it: ConvItem): boolean =>
+    !!filterUserId && authorOf(it) !== filterUserId;
+  const hiddenCount = useMemo(() => {
+    if (!filterUserId) return 0;
+    let n = 0;
+    for (const r of rounds)
+      for (const it of r.items) if (authorOf(it) !== filterUserId) n++;
+    return n;
+  }, [rounds, filterUserId]);
+  const totalItemCount = useMemo(
+    () => rounds.reduce((n, r) => n + r.items.length, 0),
+    [rounds],
+  );
+  const isAiFilter = filterUserId === AI_FILTER_ID;
+  // Filtering to YOURSELF reads "your feedback" (the stack labels you "you").
+  const isSelfFilter = !!filterUserId && filterUserId === currentUserId;
+  // A PERSON filter (not the AI) that matches nothing → show a clean empty
+  // state instead of the whole version spine with no cards under it.
+  const emptyPersonFilter =
+    !!filterUserId && !isAiFilter && hiddenCount === totalItemCount;
+  const filterName = !filterUserId
+    ? null
+    : isAiFilter
+      ? aiName(
+          [...versions]
+            .filter((v) => v.source)
+            .sort((a, b) => b.version - a.version)[0]?.source ?? null,
+        )
+      : nameFromEmail(
+          participants.find((p) => p.userId === filterUserId)?.email ?? null,
+        );
+
   // Resolve a version's publisher (created_by) → email, via the participant list,
   // so the spine can name "requested by …" / the v1 owner. null when unknown.
   const emailById = useMemo(() => {
@@ -201,16 +254,10 @@ export default function FeedStream({
   const scrollToVersion = (v: number) =>
     roundRefs.current.get(v)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  // Open at the CURRENT version: place its spine break ~15% below the top (a
-  // slice of the previous round shows above). If it's the first/only round
-  // (nothing above), stay at the top. Runs once, after layout.
-  const openedRef = useRef(false);
-  useEffect(() => {
-    if (openedRef.current) return;
-    if (currentRoundIndex <= 0) {
-      openedRef.current = true; // nothing earlier → top is correct
-      return;
-    }
+  // Scroll so the CURRENT version's round sits ~15% below the top (a slice of
+  // the previous round shows above). Used to open the feed there, and to return
+  // there when a filter is cleared.
+  const scrollToCurrentRound = useCallback(() => {
     const container = scrollRef.current;
     const currentVer = rounds[currentRoundIndex]?.version.version;
     const el = currentVer != null ? roundRefs.current.get(currentVer) : null;
@@ -219,12 +266,85 @@ export default function FeedStream({
       el.getBoundingClientRect().top -
       container.getBoundingClientRect().top -
       container.clientHeight * 0.15;
+  }, [rounds, currentRoundIndex]);
+
+  // Open at the CURRENT version once, after layout. If it's the first/only
+  // round (nothing above), the top is already correct.
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (openedRef.current) return;
+    if (currentRoundIndex <= 0) {
+      openedRef.current = true;
+      return;
+    }
+    scrollToCurrentRound();
     openedRef.current = true;
-  }, [rounds, currentRoundIndex, parsedByVersion]);
+  }, [currentRoundIndex, parsedByVersion, scrollToCurrentRound]);
+
+  // When a filter is CLEARED, return to the current version's comments (founder
+  // call 2026-07-03) — the cards reappear, so scroll after the DOM settles.
+  const prevFilterRef = useRef(filterUserId);
+  useEffect(() => {
+    const was = prevFilterRef.current;
+    prevFilterRef.current = filterUserId;
+    if (was && !filterUserId) {
+      const raf = requestAnimationFrame(scrollToCurrentRound);
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [filterUserId, scrollToCurrentRound]);
 
   return (
     <div ref={scrollRef} className={className}>
       <div className="mx-auto w-full max-w-[760px] py-2 flex flex-col gap-3">
+        {/* Huddler filter chip — why the feed looks thinner, and the way out. */}
+        {filterUserId && (
+          <div className="sticky top-0 z-10 flex items-center gap-2 py-0.5">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold shadow-sm"
+              style={{ backgroundColor: "#E1F5EE", color: "#085041" }}
+            >
+              {isSelfFilter
+                ? "Showing your feedback"
+                : `Showing ${filterName}’s ${isAiFilter ? "versions" : "feedback"}`}
+              <button
+                type="button"
+                onClick={onClearFilter}
+                aria-label="Clear the filter — show everyone's feedback"
+                className="px-0.5 font-semibold transition-opacity hover:opacity-60"
+              >
+                ✕
+              </button>
+            </span>
+            {hiddenCount > 0 && !emptyPersonFilter && (
+              <span className="text-[11px] text-muted">
+                {hiddenCount} {isAiFilter ? "feedback items" : "from others"} hidden
+              </span>
+            )}
+          </div>
+        )}
+        {/* A person with nothing on this deck → a clean empty state (founder
+            call 2026-07-03), not the whole spine with no cards under it. */}
+        {emptyPersonFilter ? (
+          <div className="mt-2 rounded-2xl border border-dashed border-border bg-white/60 px-5 py-8 text-center">
+            <p className="text-sm font-semibold text-[#1d1d1b]">
+              {isSelfFilter
+                ? "You haven’t contributed to this deck yet"
+                : `No contributions from ${filterName} to this deck yet`}
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              {isSelfFilter ? "Your" : `${filterName}’s`} comments, requested
+              slides, and removal flags will show up here.
+            </p>
+            <button
+              type="button"
+              onClick={onClearFilter}
+              className="mt-4 text-xs font-semibold text-brand hover:text-brand-hover"
+            >
+              Show everyone&apos;s feedback
+            </button>
+          </div>
+        ) : (
+          <>
         {arrivalActivity && (
           <div
             className="flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5"
@@ -305,9 +425,11 @@ export default function FeedStream({
                     <span className="h-px flex-1 bg-brand/30" />
                   </div>
                 )}
-                {round.items.length > 0 && (
+                {round.items.filter((it) => !itemHidden(it)).length > 0 && (
                   <div className="ml-3 flex flex-col gap-2.5 border-l-2 border-black/[0.07] pl-3 sm:ml-5 sm:pl-4">
-                    {round.items.map((item) => (
+                    {round.items
+                      .filter((it) => !itemHidden(it))
+                      .map((item) => (
                       <FeedItemCard
                         key={item.key}
                         item={item}
@@ -324,6 +446,10 @@ export default function FeedStream({
                           !round.isCurrent &&
                           (item.addressedIn != null || isItemDismissed(item))
                         }
+                        // Current-round cards get the light-purple outline (the
+                        // live working set vs grey settled history — founder
+                        // call 2026-07-03).
+                        currentRound={round.isCurrent}
                         onSelect={() => selectItem(item, v.version)}
                         onAddressedClick={scrollToVersion}
                         // Owner curation on current-round cards only (past
@@ -372,6 +498,8 @@ export default function FeedStream({
               </Link>
             )}
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

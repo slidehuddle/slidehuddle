@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CommentRow, FlagRow } from "@/lib/slide-store";
 import RelativeTime from "./RelativeTime";
+import SharedAvatar from "./Avatar";
 
 function CommentBody({
   body,
@@ -85,6 +86,12 @@ type Props = {
    *  (provider-neutral — decks come from ChatGPT too, founder decision
    *  2026-07-02); the default keeps the classic viewer's "Claude" unchanged. */
   aiName?: string;
+  /** I1 fix (floating panel only): with `translucent`, comment authors render
+   *  with the SHARED <Avatar> (person colour + owner ring) instead of the
+   *  panel's local letter-circle, so a person reads identically in the panel,
+   *  the feed cards, and the huddler stack. Classic (translucent=false) keeps
+   *  the local avatar untouched. */
+  deckOwnerId?: string | null;
 };
 
 function formatTime(iso: string): string {
@@ -134,6 +141,7 @@ export default function CommentsPanel({
   onClose,
   translucent = false,
   aiName = "Claude",
+  deckOwnerId = null,
 }: Props) {
   // When translucent, each comment / placeholder sits on its own opaque white
   // card so the text stays readable over the see-through panel; off, the entries
@@ -434,7 +442,23 @@ export default function CommentsPanel({
                 className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""} ${cardClass}`}
               >
                 <div className="flex items-center gap-2">
-                  <Avatar email={entry.comment.author_email} />
+                  {/* Floating panel (translucent) → the shared Avatar, so the
+                      person matches the feed + huddler stack (I1). Classic
+                      keeps the panel's original local letter avatar. */}
+                  {translucent ? (
+                    <SharedAvatar
+                      userId={entry.comment.user_id}
+                      ownerId={deckOwnerId}
+                      email={entry.comment.author_email}
+                      self={
+                        !!currentUserId &&
+                        entry.comment.user_id === currentUserId
+                      }
+                      size={24}
+                    />
+                  ) : (
+                    <Avatar email={entry.comment.author_email} />
+                  )}
                   <span className="text-xs font-semibold text-foreground truncate">
                     {authorName(entry.comment.author_email)}
                   </span>

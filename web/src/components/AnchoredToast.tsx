@@ -36,9 +36,15 @@ export default function AnchoredToast<T extends HTMLElement>({
       if (!a) return;
       const r = a.getBoundingClientRect();
       // Just below the anchor, right-aligned to it (matches the old inline look),
-      // clamped to stay on-screen.
+      // clamped to stay on-screen — on BOTH sides: for an anchor near the LEFT
+      // edge (e.g. the huddler stack's invite "+"), right-alignment would push
+      // the toast off-screen left, so cap `right` to always leave `maxWidth`
+      // of room.
       const top = Math.min(r.bottom + 6, window.innerHeight - 8);
-      const right = Math.max(8, window.innerWidth - r.right);
+      const right = Math.min(
+        Math.max(8, window.innerWidth - r.right),
+        Math.max(8, window.innerWidth - maxWidth - 8),
+      );
       setPos({ top, right });
     }
     update();
@@ -50,7 +56,7 @@ export default function AnchoredToast<T extends HTMLElement>({
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
-  }, [open, anchorRef]);
+  }, [open, anchorRef, maxWidth]);
 
   // Gate the portal on hydration: createPortal renders nothing on the server but
   // mounts immediately on the client, so rendering it on the first client pass

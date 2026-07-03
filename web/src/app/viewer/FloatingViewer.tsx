@@ -39,6 +39,7 @@ import SlideFlagControl from "./SlideFlagControl";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
 import FeedStream from "./FeedStream";
 import HuddleAvatars from "./HuddleAvatars";
+import HuddleFilterStack from "./HuddleFilterStack";
 import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import ArrivalBanner from "./ArrivalBanner";
 import type { ArrivalActivity } from "./arrival-activity";
@@ -91,6 +92,10 @@ const PANEL_INSET = EDGE_GAP + PANEL_W + PANEL_GAP; // 368
 // the nearest ratio.
 const SPECTRUM_SNAPS = [0.16, 0.4, 0.62] as const; // deck · split · feed
 const SPECTRUM_RAIL_MAX = 210; // px: narrower than this → rail; wider → full feed
+// The Huddlers filter stack (Slice 3): a floating vertical pill on the far left
+// in split/feed modes. The feed region shifts right to make room for it.
+const STACK_W = 46; // the stack pill's width
+const STACK_GAP = 8; // breathing room between the stack and the feed region
 // The three modes, mirrored in the `?mode=` URL param so version navigation
 // (which remounts the viewer) preserves the layout the user picked.
 const SPECTRUM_MODES = ["deck", "split", "feed"] as const;
@@ -381,6 +386,11 @@ export default function FloatingViewer({
   const [feedFrac, setFeedFrac] = useState<number>(() =>
     modeToFrac(spectrumFeed?.initialMode),
   );
+  // The Huddlers-as-filter (Slice 3): which person the feed is filtered to.
+  // The filter only APPLIES while the stack is visible (split/feed) — in deck
+  // mode both vanish together, so a filter is never invisibly active; return
+  // to split/feed and it's showing again, chip and all (like the folded panel).
+  const [feedFilterUserId, setFeedFilterUserId] = useState<string | null>(null);
   const [stageW, setStageW] = useState(0);
   const draggingDividerRef = useRef(false);
 
@@ -648,6 +658,15 @@ export default function FloatingViewer({
   // (a feed column below SPECTRUM_RAIL_MAX px is too cramped to read).
   const spectrumRailMode =
     fracToMode(feedFrac) === "deck" || leftRegionW < SPECTRUM_RAIL_MAX;
+  // The Huddlers filter stack shows only where the FEED shows (split/feed, not
+  // the rail) and only for signed-in viewers with participants (identities
+  // never reach anonymous viewers). When visible, everything left-side shifts
+  // right by its width.
+  const stackVisible =
+    spectrumOn && !spectrumRailMode && !!currentUserId && participants.length > 0;
+  const stackOffset = stackVisible ? STACK_W + STACK_GAP : 0;
+  // The filter is inert whenever its UI (the stack) is hidden.
+  const activeFeedFilter = stackVisible ? feedFilterUserId : null;
   // FOLDING comments panel (Slice 2, design model §3): in FEED mode the feed
   // is the whole point and the same comments are inline in it, so the panel is
   // redundant — it FOLDS away. In SPLIT mode the slide is a real working
@@ -664,7 +683,7 @@ export default function FloatingViewer({
     !!currentUserId &&
     activeSlideIndex !== null;
   const leftInset = spectrumOn
-    ? EDGE_GAP + leftRegionW + PANEL_GAP
+    ? EDGE_GAP + stackOffset + leftRegionW + PANEL_GAP
     : stripVisible
       ? STRIP_INSET
       : 0;
@@ -837,6 +856,43 @@ export default function FloatingViewer({
     for (const f of flags) if (!seedIds.has(f.id)) merged.push(f);
     return merged;
   }, [spectrumFeed, readOnly, flags]);
+  // Per-person ACTIONABLE contribution counts for the filter stack (founder
+  // call 2026-07-03): the CURRENT round only — live comments on the latest
+  // version + open requested slides + open removal flags, excluding dismissed
+  // ("won't send to AI") and already-addressed items. These are the ones the
+  // next revision acts on; settled history stays visible in the feed but
+  // doesn't inflate the badges.
+  const contributionCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    const bump = (id: string | null) => {
+      if (id) m.set(id, (m.get(id) ?? 0) + 1);
+    };
+    for (const c of spectrumComments)
+      if (c.version === currentVersion && !c.dismissed) bump(c.user_id);
+    for (const s of spectrumStubs)
+      if (!s.dismissed && !s.resolved_at) bump(s.requested_by);
+    for (const f of spectrumFlags)
+      if (!f.dismissed && !f.resolved_at) bump(f.flagged_by);
+    return m;
+  }, [spectrumComments, spectrumStubs, spectrumFlags, currentVersion]);
+  // The AI's provenance for the stack's model mark: the latest version that
+  // recorded a source (a deck may mix models across versions; the most recent
+  // one is "who's working on it now"). null → the generic AI mark.
+  const spectrumAiSource = useMemo(() => {
+    if (!spectrumFeed) return null;
+    const withSource = spectrumFeed.versions
+      .filter((v) => v.source)
+      .sort((a, b) => b.version - a.version);
+    return withSource[0]?.source ?? null;
+  }, [spectrumFeed]);
+  // How many versions the AI has published — the purple badge on its mark.
+  // Matches the feed's semantics: v1 is "{owner} started this huddle"; every
+  // v2+ is an "AI published vN" event. Unique version numbers − 1, floor 0.
+  const spectrumAiVersionCount = useMemo(() => {
+    if (!spectrumFeed) return 0;
+    const unique = new Set(spectrumFeed.versions.map((v) => v.version));
+    return Math.max(0, unique.size - 1);
+  }, [spectrumFeed]);
 
   // ── Spectrum interactions (?view=spectrum) ────────────────────────────────
   // Clicking a feed item / version thumbnail focuses that real slide on the live
@@ -929,14 +985,20 @@ export default function FloatingViewer({
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     draggingDividerRef.current = true;
   }, []);
-  const onDividerMove = useCallback((e: React.PointerEvent) => {
-    if (!draggingDividerRef.current) return;
-    const st = stageRef.current?.getBoundingClientRect();
-    if (!st) return;
-    const f =
-      (e.clientX - st.left - EDGE_GAP) / Math.max(1, st.width - EDGE_GAP * 2);
-    setFeedFrac(Math.min(0.66, Math.max(0.06, f)));
-  }, []);
+  const onDividerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!draggingDividerRef.current) return;
+      const st = stageRef.current?.getBoundingClientRect();
+      if (!st) return;
+      // The feed region starts after the edge gap + the filter stack (when
+      // shown), so subtract both for the drag to track the cursor.
+      const f =
+        (e.clientX - st.left - EDGE_GAP - stackOffset) /
+        Math.max(1, st.width - EDGE_GAP * 2);
+      setFeedFrac(Math.min(0.66, Math.max(0.06, f)));
+    },
+    [stackOffset],
+  );
   const onDividerUp = useCallback(() => {
     if (!draggingDividerRef.current) return;
     draggingDividerRef.current = false;
@@ -1168,24 +1230,25 @@ export default function FloatingViewer({
                   <span className="inline-flex items-center gap-2">
                     {/* "In this huddle" — who's part of the deck. Signed-in
                         viewers see real avatars; anonymous viewers get the
-                        name-free chip (no identities ever reach them). */}
+                        name-free chip (no identities ever reach them). In the
+                        SPECTRUM the huddle lives in the left filter stack
+                        instead (one element, not two — deck mode deliberately
+                        shows no huddle at all), so the cluster is suppressed. */}
                     {currentUserId ? (
-                      <HuddleAvatars
-                        participants={participants}
-                        currentUserId={currentUserId}
-                        ownerId={deckOwnerId}
-                      />
+                      spectrumOn ? null : (
+                        <HuddleAvatars
+                          participants={participants}
+                          currentUserId={currentUserId}
+                          ownerId={deckOwnerId}
+                        />
+                      )
                     ) : reviewingCount >= 1 ? (
                       <ReviewingChip count={reviewingCount} />
                     ) : (
                       <SharedDeckChip />
                     )}
                     {currentUserEmail ? (
-                      <AvatarMenu
-                        email={currentUserEmail}
-                        userId={currentUserId}
-                        ownerId={deckOwnerId}
-                      />
+                      <AvatarMenu email={currentUserEmail} />
                     ) : (
                       <Link
                         href={loginHref}
@@ -1255,11 +1318,7 @@ export default function FloatingViewer({
                 </span>
               </>
             ) : currentUserEmail ? (
-              <AvatarMenu
-                email={currentUserEmail}
-                userId={currentUserId}
-                ownerId={deckOwnerId}
-              />
+              <AvatarMenu email={currentUserEmail} />
             ) : (
               <Link
                 href={loginHref}
@@ -1521,6 +1580,11 @@ export default function FloatingViewer({
                 onClose={() => setCommentsPanelOpen(false)}
                 translucent
                 aiName="AI"
+                // I1 fix: the floating panel uses the SHARED <Avatar> (needs
+                // the owner id for its ring), so a person reads identically in
+                // the panel, the feed, and the stack. Classic keeps its local
+                // letter avatar (translucent=false → prop unused there).
+                deckOwnerId={deckOwnerId}
               />
             </div>
           )}
@@ -1535,10 +1599,13 @@ export default function FloatingViewer({
             <>
               <div
                 aria-label={spectrumRailMode ? "Slides" : "Conversation feed"}
-                className="absolute left-4 top-[84px] bottom-4 z-30 overflow-hidden rounded-2xl border border-border bg-white/55 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+                className="absolute top-[84px] bottom-4 z-30 overflow-hidden rounded-2xl border border-border bg-white/55 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
                 style={{
+                  left: `${EDGE_GAP + stackOffset}px`,
                   width: `${leftRegionW}px`,
-                  transition: reducedMotion ? undefined : "width 170ms ease",
+                  transition: reducedMotion
+                    ? undefined
+                    : "width 170ms ease, left 170ms ease",
                 }}
               >
                 {spectrumRailMode ? (
@@ -1611,6 +1678,10 @@ export default function FloatingViewer({
                           }
                         : null
                     }
+                    // Huddler filter (Slice 3): dim other people's cards + show
+                    // the "Showing {name}'s feedback" chip; ✕ clears.
+                    filterUserId={activeFeedFilter}
+                    onClearFilter={() => setFeedFilterUserId(null)}
                   />
                 )}
               </div>
@@ -1631,13 +1702,36 @@ export default function FloatingViewer({
                 onPointerUp={onDividerUp}
                 onKeyDown={onDividerKey}
                 className="group absolute top-[84px] bottom-4 z-40 flex w-5 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center"
-                style={{ left: `${EDGE_GAP + leftRegionW + PANEL_GAP / 2}px` }}
+                style={{
+                  left: `${EDGE_GAP + stackOffset + leftRegionW + PANEL_GAP / 2}px`,
+                }}
               >
                 <span
                   aria-hidden="true"
                   className="h-12 w-1.5 rounded-full bg-[#4A3FB5] shadow transition-transform group-hover:scale-y-110"
                 />
               </div>
+
+              {/* Huddlers-as-filter stack (Slice 3) — the far-left floating
+                  pill. Split/feed only (deck mode is focused commenting);
+                  anchored to the TOP (aligned with the feed region, founder
+                  call 2026-07-03); persistent (not tied to the chrome fade). */}
+              {stackVisible && (
+                <div className="absolute left-4 top-[84px] z-30">
+                  <HuddleFilterStack
+                    participants={participants}
+                    deckOwnerId={deckOwnerId}
+                    currentUserId={currentUserId}
+                    aiSource={spectrumAiSource}
+                    aiVersionCount={spectrumAiVersionCount}
+                    counts={contributionCounts}
+                    filterUserId={activeFeedFilter}
+                    onToggle={(id) =>
+                      setFeedFilterUserId((cur) => (cur === id ? null : id))
+                    }
+                  />
+                </div>
+              )}
             </>
           )}
 

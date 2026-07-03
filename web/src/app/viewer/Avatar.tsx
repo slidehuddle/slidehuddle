@@ -1,18 +1,24 @@
 // The ONE avatar component, used everywhere a person (or the AI) appears: the
-// feed cards, the version timeline lines, and the top-bar "Huddlers" cluster
-// (via HuddleAvatars). It carries TWO signals at a glance:
-//
-//   SHAPE = ROLE
-//     owner        → FILLED with a soft PASTEL of their colour + ink initials
-//     collaborator → OUTLINE: WHITE fill + a 2px coloured ring + ink initials
-//     ai           → a distinct dark/ink circle with an amber sparkle, so the AI
-//                    never reads as a teammate (amber is reserved for it)
+// feed cards, the version timeline lines, the top-bar "Huddlers" cluster
+// (via HuddleAvatars), the spectrum's filter stack, and the floating comments
+// panel. It carries TWO signals at a glance (RESTYLED 2026-07-03, founder
+// decision — softer, Google/Miro-like; the old filled-vs-outline shape rule is
+// retired):
 //
 //   COLOUR = PERSON
-//     each person gets a deterministic colour from their user id (hash), so
+//     everyone gets the SAME calm treatment: a soft PASTEL fill of their colour
+//     with initials in that colour's ink — no heavy rings, nothing jarring.
+//     Each person's colour is deterministic from their user id (hash), so
 //     they're ALWAYS the same colour everywhere. The palette deliberately avoids
 //     the system colours — no purple (brand/buttons), no teal/green (comments),
 //     no amber (the AI) — so an avatar never reads as a button, chip, or the AI.
+//
+//   RING = OWNER
+//     the deck owner alone carries a thin outer ring in their own colour,
+//     separated by a white gap (an "anchor" halo).
+//
+//   ai → unchanged: a distinct dark/ink circle with an amber sparkle, so the AI
+//     never reads as a teammate (amber is reserved for it).
 //
 // IMPORTANT — the owner decision lives HERE, in this one component. Callers pass
 // the person's `userId` and the deck's `ownerId` (decks.user_id); this component
@@ -129,6 +135,7 @@ export default function Avatar({
   email,
   displayName,
   isAI = false,
+  self = false,
   size = 32,
   title,
 }: {
@@ -139,13 +146,22 @@ export default function Avatar({
   email: string | null;
   displayName?: string | null;
   isAI?: boolean;
+  /** This avatar is the SIGNED-IN VIEWER THEMSELVES (founder call 2026-07-03):
+   *  renders as the account identity — purple person icon + green "signed in"
+   *  dot, matching the account chip (G2) — instead of initials, so "you" stand
+   *  out from the rest and read the same in the stack, the feed cards, and the
+   *  panel. The owner ring still applies on top when you own the deck. */
+  self?: boolean;
   size?: number;
   /** Tooltip override; defaults to the display name / email. */
   title?: string;
 }) {
   const initials = initialsFor({ displayName, email });
   const isOwner = !!ownerId && !!userId && userId === ownerId;
-  const tip = title ?? displayName ?? email ?? (isAI ? "AI" : "a teammate");
+  // Default tooltip names the deck owner explicitly (founder call 2026-07-03 —
+  // the thin ring alone wasn't clear). An explicit `title` override wins.
+  const baseTip = title ?? displayName ?? email ?? (isAI ? "AI" : "a teammate");
+  const tip = !title && isOwner ? `${baseTip} · deck owner` : baseTip;
   const base =
     "inline-flex items-center justify-center rounded-full select-none shrink-0 font-semibold leading-none";
   const style: React.CSSProperties = {
@@ -153,6 +169,57 @@ export default function Avatar({
     height: size,
     fontSize: Math.round(size * 0.4),
   };
+  // The owner's marker (founder call 2026-07-03): an ACTUAL purple star,
+  // bottom-left — no ring, no enclosing circle. A thin white outline keeps it
+  // legible on any avatar colour.
+  const starSize = Math.max(12, Math.round(size * 0.46));
+  const ownerStar = isOwner ? (
+    <svg
+      aria-hidden="true"
+      className="absolute -bottom-1 -left-1 z-[1]"
+      width={starSize}
+      height={starSize}
+      viewBox="0 0 24 24"
+      fill="#4A3FB5"
+      stroke="#ffffff"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+    >
+      <path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2l-6.1 3.4 1.4-6.8L2.2 9.1l6.9-.8z" />
+    </svg>
+  ) : null;
+
+  if (self) {
+    // "You" — the account identity (purple + person icon + green dot), not a
+    // person-colour circle. Green dot: for your own avatar, signed-in and
+    // online are the same fact, so it reuses the presence green.
+    const dot = Math.max(7, Math.round(size * 0.3));
+    return (
+      <span
+        className={`relative ${base}`}
+        style={{
+          ...style,
+          backgroundColor: "#EEEDFE",
+          color: "#3C3489",
+        }}
+        title={tip}
+        role="img"
+        aria-label={`${tip} (you)`}
+      >
+        <PersonIcon color="#3C3489" />
+        <span
+          aria-hidden="true"
+          className="absolute right-0 top-0 rounded-full ring-2 ring-white"
+          style={{
+            width: dot,
+            height: dot,
+            backgroundColor: "#3FA344",
+          }}
+        />
+        {ownerStar}
+      </span>
+    );
+  }
 
   if (isAI) {
     return (
@@ -169,37 +236,18 @@ export default function Avatar({
 
   const { ink, pastel } = personColor(userId || email || "");
 
-  if (isOwner) {
-    // Owner → FILLED with a soft PASTEL of their colour + ink initials (calm, not
-    // jarring). The pastel fill is the role signal; the colour is the person.
-    return (
-      <span
-        className={base}
-        style={{ ...style, backgroundColor: pastel, color: ink }}
-        title={tip}
-        role="img"
-        aria-label={tip}
-      >
-        {initials || <PersonIcon color={ink} />}
-      </span>
-    );
-  }
-
-  // Collaborator → WHITE fill + a 2px ring + initials in their colour (outline).
+  // EVERYONE gets the soft pastel fill + ink initials (colour = person). The
+  // owner adds the purple star (bottom-left) — no ring.
   return (
     <span
-      className={base}
-      style={{
-        ...style,
-        backgroundColor: "#ffffff",
-        color: ink,
-        border: `2px solid ${ink}`,
-      }}
+      className={`relative ${base}`}
+      style={{ ...style, backgroundColor: pastel, color: ink }}
       title={tip}
       role="img"
       aria-label={tip}
     >
       {initials || <PersonIcon color={ink} />}
+      {ownerStar}
     </span>
   );
 }

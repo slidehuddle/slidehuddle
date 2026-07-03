@@ -228,6 +228,7 @@ export default function FeedItemCard({
   onSelect,
   onAddressedClick,
   curation = null,
+  currentRound = false,
 }: {
   item: Extract<FeedItem, { kind: "comment" | "stub" | "flag" }>;
   deck: ParsedDeck;
@@ -253,6 +254,10 @@ export default function FeedItemCard({
     onDismiss: (dismissed: boolean) => Promise<void>;
     onEdit: ((ownerEditedBody: string | null) => Promise<void>) | null;
   } | null;
+  /** This card is in the CURRENT round → its outline is a light brand purple
+   *  (the live working set), clearly apart from the grey of settled history
+   *  (founder call 2026-07-03). Past rounds keep the grey border. */
+  currentRound?: boolean;
 }) {
   // Owner inline edit (comments only): open state + the draft text.
   const [editing, setEditing] = useState(false);
@@ -356,7 +361,13 @@ export default function FeedItemCard({
         }
       }}
       className={`group relative flex cursor-pointer flex-col gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition-all sm:flex-row ${
-        selected ? "ring-2 ring-brand" : "border border-border hover:border-black/20"
+        selected
+          ? "ring-2 ring-brand"
+          : currentRound
+            ? // Current round = the live working set: a light brand-purple
+              // outline, clearly apart from settled grey history.
+              "border border-[#D8D4F2] hover:border-[#B9B3E6]"
+            : "border border-border hover:border-black/20"
       } ${
         muted && !selected
           ? "[filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
@@ -369,7 +380,15 @@ export default function FeedItemCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <Avatar userId={who.userId} ownerId={deckOwnerId} email={who.email} size={28} />
+            <Avatar
+              userId={who.userId}
+              ownerId={deckOwnerId}
+              email={who.email}
+              // Your own cards carry your account identity (person icon +
+              // green dot), aligned with the stack (J8) and the account chip.
+              self={!!currentUserId && who.userId === currentUserId}
+              size={28}
+            />
             <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
               <span className="text-sm font-semibold text-[#1d1d1b]">{name}</span>
               {tags.length > 0 && (
