@@ -172,16 +172,23 @@ function StubThumb({
   );
 }
 
-// A hoverable horizontal gap between two stacked thumbnails. The "+" sits
-// centred over the thumbnail column (offset past the number column). Clicking
-// opens the insert form (which flips above when near the bottom of the screen).
-function InsertGap({
+// A hoverable gap between two thumbnails — the "+" insert affordance (D3).
+// EXPORTED so the feed's current-version thumbnail strip (LazyThumbnailStrip)
+// reuses this exact component instead of forking a third copy.
+//   orientation "row"    = a horizontal band between STACKED thumbs (this
+//                          vertical rail) — the "+" centres over the tile
+//                          column, offset past the number column.
+//   orientation "column" = a vertical band between SIDE-BY-SIDE thumbs (the
+//                          feed's horizontal strip).
+// Clicking opens the insert form (which flips above near the bottom edge).
+export function InsertGap({
   open,
   onOpen,
   onClose,
   canInsert,
   loginHref,
   onSubmit,
+  orientation = "row",
 }: {
   open: boolean;
   onOpen: () => void;
@@ -193,8 +200,58 @@ function InsertGap({
     subtitle: string;
     body: string;
   }) => Promise<void>;
+  orientation?: "row" | "column";
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
+  const plusButton = (
+    <button
+      ref={btnRef}
+      type="button"
+      onClick={open ? onClose : onOpen}
+      aria-label="Insert a slide here"
+      className={`relative z-[1] flex h-4 w-4 items-center justify-center rounded-full bg-brand text-white transition-opacity ${open ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+    </button>
+  );
+  const popover = (
+    <PortalPopover
+      anchorRef={btnRef}
+      open={open}
+      onClose={onClose}
+      width={288}
+      placement="bottom-center"
+    >
+      <InsertStubForm
+        canInsert={canInsert}
+        loginHref={loginHref}
+        onSubmit={onSubmit}
+        onClose={onClose}
+      />
+    </PortalPopover>
+  );
+
+  if (orientation === "column") {
+    // Vertical gap between side-by-side thumbs (horizontal strip): a hairline
+    // vertical connector with the "+" centred on it.
+    return (
+      <div
+        className="group relative flex shrink-0 items-center justify-center self-stretch"
+        style={{ width: 18 }}
+      >
+        <span
+          aria-hidden="true"
+          className={`absolute inset-y-1 left-1/2 w-px -translate-x-1/2 transition-colors ${open ? "bg-brand/40" : "bg-transparent group-hover:bg-brand/30"}`}
+        />
+        {plusButton}
+        {popover}
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center" style={{ height: GAP_H }}>
       <span className="shrink-0" style={{ width: NUM_W }} aria-hidden="true" />
@@ -206,32 +263,8 @@ function InsertGap({
           aria-hidden="true"
           className={`absolute inset-x-0 h-px transition-colors ${open ? "bg-brand/40" : "bg-transparent group-hover:bg-brand/30"}`}
         />
-        <button
-          ref={btnRef}
-          type="button"
-          onClick={open ? onClose : onOpen}
-          aria-label="Insert a slide here"
-          className={`relative z-[1] flex h-4 w-4 items-center justify-center rounded-full bg-brand text-white transition-opacity ${open ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <PortalPopover
-          anchorRef={btnRef}
-          open={open}
-          onClose={onClose}
-          width={288}
-          placement="bottom-center"
-        >
-          <InsertStubForm
-            canInsert={canInsert}
-            loginHref={loginHref}
-            onSubmit={onSubmit}
-            onClose={onClose}
-          />
-        </PortalPopover>
+        {plusButton}
+        {popover}
       </div>
     </div>
   );

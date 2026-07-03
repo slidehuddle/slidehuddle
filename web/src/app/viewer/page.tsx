@@ -69,9 +69,10 @@ export default async function ViewerPage({
     view?: string;
     slide?: string;
     from?: string;
+    mode?: string;
   }>;
 }) {
-  const { slides, id, source: sourceParam, v, view, slide, from } =
+  const { slides, id, source: sourceParam, v, view, slide, from, mode } =
     await searchParams;
   // G1 analytics (docs/G1-MEASUREMENT.md §4): which landing this session
   // originated on. The feed's Open-deck/Open-slide links carry ?from=feed, so a
@@ -93,12 +94,17 @@ export default async function ViewerPage({
   // With no ?view param we fall back to FLOATING_VIEWER_DEFAULT (a kill switch —
   // see floatingViewerDefault above). (`view` is a separate param from `v`, the
   // version selector — they don't collide.)
+  // ?view=spectrum forces the floating viewer (its gated SPECTRUM mode hosts the
+  // conversation feed alongside the deck on one resizable screen — see the
+  // spectrumFeed prop below). URL-only for now: nobody lands on it without the
+  // param, so the live default and the partner feed test are untouched.
   const useFloatingViewer =
-    view === "floating"
+    view === "floating" || view === "spectrum"
       ? true
       : view === "classic"
         ? false
         : floatingViewerDefault();
+  const isSpectrum = view === "spectrum";
 
   let html = "";
   let source: "param" | "stored" | "sample";
@@ -360,6 +366,7 @@ export default async function ViewerPage({
       (view !== "deck" &&
         view !== "classic" &&
         view !== "floating" &&
+        view !== "spectrum" &&
         isFeedPartner));
 
   // "In this huddle" people cluster — floating viewer only. Identities (emails)
@@ -390,7 +397,11 @@ export default async function ViewerPage({
   let feedStubs: StubRow[] = [];
   let feedFlags: FlagRow[] = [];
   let versionsHtml: Record<number, string> = {};
-  if (showFeed && source === "stored" && id) {
+  // The feed dataset (all-version comments + resolved-inclusive stubs/flags +
+  // per-version HTML) is needed by the standalone feed AND by the spectrum's
+  // co-present feed column. Same RLS-gated reads + same anonymous email
+  // redaction either way; the extra reads only happen on those two URLs.
+  if ((showFeed || isSpectrum) && source === "stored" && id) {
     const [commentsLoad, stubsLoad, flagsLoad] = await Promise.all([
       getAllCommentsForDeck(id, currentUserId),
       getStubsForDeck(id, { includeResolved: true }),
@@ -539,6 +550,25 @@ export default async function ViewerPage({
           deckOwnerId={deckOwnerId}
           // G1 analytics: feed-origin vs direct-deck session (?from=feed).
           surface={landingSurface}
+          // ?view=spectrum: the feed dataset for the co-present feed column
+          // (all-version comments + resolved-inclusive stubs/flags + per-version
+          // HTML). null for the normal deck view, so the viewer behaves exactly
+          // as today without the param.
+          spectrumFeed={
+            isSpectrum
+              ? {
+                  versions: allVersionRows,
+                  comments: feedComments,
+                  stubs: feedStubs,
+                  flags: feedFlags,
+                  versionsHtml,
+                  // The split ratio the user picked (deck/split/feed), carried in
+                  // ?mode= so it survives version navigation (which remounts the
+                  // viewer). null on first open → defaults to deck.
+                  initialMode: mode ?? null,
+                }
+              : null
+          }
         />
       </main>
     );

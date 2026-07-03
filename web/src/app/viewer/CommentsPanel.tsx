@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CommentRow, FlagRow } from "@/lib/slide-store";
 import RelativeTime from "./RelativeTime";
+import SharedAvatar from "./Avatar";
 
 function CommentBody({
   body,
@@ -80,6 +81,17 @@ type Props = {
    *  inputs remain fully legible. Defaults off → the current viewer's panel is
    *  unchanged. */
   translucent?: boolean;
+  /** Who the curation copy names as the recipient ("Won't send to {aiName}",
+   *  "Edit what's sent to {aiName}", …). The floating viewer passes "AI"
+   *  (provider-neutral — decks come from ChatGPT too, founder decision
+   *  2026-07-02); the default keeps the classic viewer's "Claude" unchanged. */
+  aiName?: string;
+  /** I1 fix (floating panel only): with `translucent`, comment authors render
+   *  with the SHARED <Avatar> (person colour + owner ring) instead of the
+   *  panel's local letter-circle, so a person reads identically in the panel,
+   *  the feed cards, and the huddler stack. Classic (translucent=false) keeps
+   *  the local avatar untouched. */
+  deckOwnerId?: string | null;
 };
 
 function formatTime(iso: string): string {
@@ -128,6 +140,8 @@ export default function CommentsPanel({
   onFlagDismiss,
   onClose,
   translucent = false,
+  aiName = "Claude",
+  deckOwnerId = null,
 }: Props) {
   // When translucent, each comment / placeholder sits on its own opaque white
   // card so the text stays readable over the see-through panel; off, the entries
@@ -334,7 +348,7 @@ export default function CommentsPanel({
                   </span>
                   {entry.flag.owner_edited_reason != null && (
                     <span
-                      title="The owner edited what's sent to Claude"
+                      title={`The owner edited what's sent to ${aiName}`}
                       className="text-[10px] shrink-0"
                       style={{ color: "#791F1F", opacity: 0.7 }}
                     >
@@ -366,7 +380,7 @@ export default function CommentsPanel({
                 </span>
                 {entry.flag.dismissed && (
                   <p className="text-xs" style={{ color: "#791F1F" }}>
-                    Won&apos;t send to Claude
+                    Won&apos;t send to {aiName}
                     {canCurate && (
                       <>
                         {" · "}
@@ -394,8 +408,8 @@ export default function CommentsPanel({
                     <button
                       type="button"
                       onClick={() => onFlagDismiss(entry.flag.id, true)}
-                      aria-label="Dismiss — won't send to Claude"
-                      title="Dismiss — won't send to Claude"
+                      aria-label={`Dismiss — won't send to ${aiName}`}
+                      title={`Dismiss — won't send to ${aiName}`}
                       className={curationBtnClass}
                       style={curationBtnStyle}
                     >
@@ -428,13 +442,29 @@ export default function CommentsPanel({
                 className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""} ${cardClass}`}
               >
                 <div className="flex items-center gap-2">
-                  <Avatar email={entry.comment.author_email} />
+                  {/* Floating panel (translucent) → the shared Avatar, so the
+                      person matches the feed + huddler stack (I1). Classic
+                      keeps the panel's original local letter avatar. */}
+                  {translucent ? (
+                    <SharedAvatar
+                      userId={entry.comment.user_id}
+                      ownerId={deckOwnerId}
+                      email={entry.comment.author_email}
+                      self={
+                        !!currentUserId &&
+                        entry.comment.user_id === currentUserId
+                      }
+                      size={24}
+                    />
+                  ) : (
+                    <Avatar email={entry.comment.author_email} />
+                  )}
                   <span className="text-xs font-semibold text-foreground truncate">
                     {authorName(entry.comment.author_email)}
                   </span>
                   {entry.comment.owner_edited_body != null && (
                     <span
-                      title="The owner edited what's sent to Claude"
+                      title={`The owner edited what's sent to ${aiName}`}
                       className="text-[10px] text-muted shrink-0"
                     >
                       · edited
@@ -460,8 +490,8 @@ export default function CommentsPanel({
                       className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
                     />
                     <p className="text-[11px] text-muted leading-snug">
-                      Changes what&apos;s sent to Claude — the original comment
-                      won&apos;t change.
+                      Changes what&apos;s sent to {aiName} — the original
+                      comment won&apos;t change.
                     </p>
                     <div className="flex items-center gap-3">
                       <button
@@ -497,7 +527,7 @@ export default function CommentsPanel({
                     {/* Dismissed → show why. Only the owner can Restore. */}
                     {entry.comment.dismissed && (
                       <p className="text-xs text-muted">
-                        Won&apos;t send to Claude
+                        Won&apos;t send to {aiName}
                         {canCurate && (
                           <>
                             {" · "}
@@ -544,8 +574,8 @@ export default function CommentsPanel({
                                 entry.comment.body,
                             );
                           }}
-                          aria-label="Edit what's sent to Claude"
-                          title="Edit what's sent to Claude"
+                          aria-label={`Edit what's sent to ${aiName}`}
+                          title={`Edit what's sent to ${aiName}`}
                           className={curationBtnClass}
                           style={curationBtnStyle}
                         >
@@ -572,8 +602,8 @@ export default function CommentsPanel({
                         <button
                           type="button"
                           onClick={() => onDismiss(entry.comment.id, true)}
-                          aria-label="Dismiss — won't send to Claude"
-                          title="Dismiss — won't send to Claude"
+                          aria-label={`Dismiss — won't send to ${aiName}`}
+                          title={`Dismiss — won't send to ${aiName}`}
                           className={curationBtnClass}
                           style={curationBtnStyle}
                         >

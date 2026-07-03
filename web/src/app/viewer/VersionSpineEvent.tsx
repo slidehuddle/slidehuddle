@@ -13,14 +13,16 @@
 // AI provenance: the producing AI ("claude" → Claude, "chatgpt" → ChatGPT) comes
 // from the version's `source`; unknown → a generic "AI" (never guessed).
 
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import Avatar from "./Avatar";
 import LazyThumbnailStrip from "./LazyThumbnailStrip";
 import { nameFromEmail } from "./FeedItemCard";
 import RelativeTime from "./RelativeTime";
 import type { ParsedDeck } from "./parse-deck";
 
-function aiName(source: string | null): string {
+// Exported: the huddler filter stack (Slice 3) names the AI in its filter chip
+// with the same rule — model name from provenance, generic "AI" when unknown.
+export function aiName(source: string | null): string {
   if (source === "claude") return "Claude";
   if (source === "chatgpt") return "ChatGPT";
   return "AI"; // unknown / pre-provenance → generic, never guessed
@@ -39,21 +41,25 @@ export type AddressedSummary = {
 // file isn't present yet — a neutral generic mark. Always a rounded SQUARE (people
 // are circles) at the same 36px footprint. The <img> onError falls back to the
 // generic mark, so a missing logo file never renders a broken image.
-function GenericAiMark() {
+function GenericAiMark({ size = 40 }: { size?: number }) {
+  const spark = Math.round(size / 2);
   return (
     <span
-      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-      style={{ backgroundColor: "#28282A" }}
+      className="flex shrink-0 items-center justify-center rounded-lg"
+      style={{ backgroundColor: "#28282A", width: size, height: size }}
       aria-label="AI"
     >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="#EF9F27" aria-hidden="true">
+      <svg width={spark} height={spark} viewBox="0 0 24 24" fill="#EF9F27" aria-hidden="true">
         <path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" />
       </svg>
     </span>
   );
 }
 
-function AiMark({ source }: { source: string | null }) {
+// Exported (with a size param): the huddler filter stack (Slice 3) shows the
+// same model mark under the signed-in user — the human/AI collaboration made
+// visible in the people place.
+export function AiMark({ source, size = 40 }: { source: string | null; size?: number }) {
   const [failed, setFailed] = useState(false);
   const logo =
     source === "claude"
@@ -61,10 +67,11 @@ function AiMark({ source }: { source: string | null }) {
       : source === "chatgpt"
         ? { src: "/logos/chatgpt.svg", label: "ChatGPT" }
         : null;
-  if (!logo || failed) return <GenericAiMark />;
+  if (!logo || failed) return <GenericAiMark size={size} />;
   return (
     <span
-      className="flex h-10 w-10 shrink-0 items-center justify-center"
+      className="flex shrink-0 items-center justify-center"
+      style={{ width: size, height: size }}
       aria-label={logo.label}
     >
       {/* Static brand logo from web/public/logos. No box — the logo sits directly
@@ -74,7 +81,8 @@ function AiMark({ source }: { source: string | null }) {
       <img
         src={logo.src}
         alt={logo.label}
-        className="h-10 w-10 object-contain"
+        className="object-contain"
+        style={{ width: size, height: size }}
         onError={() => setFailed(true)}
       />
     </span>
@@ -95,6 +103,7 @@ export default function VersionSpineEvent({
   deck,
   addressed,
   onSelectSlide,
+  insert = null,
 }: {
   version: number;
   slideCount: number | null;
@@ -108,7 +117,13 @@ export default function VersionSpineEvent({
   deckOwnerId: string | null;
   deck: ParsedDeck | null;
   addressed: AddressedSummary;
-  onSelectSlide: (slideIndex: number) => void;
+  /** (slideIndex, version) — the version is THIS event's version, so a host can
+   *  tell which version's slide was clicked (and switch to it if needed). */
+  onSelectSlide: (slideIndex: number, version: number) => void;
+  /** Optional "+" insert-between-slides for THIS event's thumbnail strip (D3).
+   *  Passed only for the CURRENT version in the spectrum; null everywhere else
+   *  (past versions are read-only; the standalone feed is read-only). */
+  insert?: ComponentProps<typeof LazyThumbnailStrip>["insert"];
 }) {
   const [showChanges, setShowChanges] = useState(false);
   const slides = slideCount != null ? `${slideCount} ${slideCount === 1 ? "slide" : "slides"}` : "";
@@ -202,7 +217,11 @@ export default function VersionSpineEvent({
 
           {deck && deck.slides.length > 0 && (
             <div className="mt-2.5">
-              <LazyThumbnailStrip deck={deck} onSelectSlide={onSelectSlide} />
+              <LazyThumbnailStrip
+                deck={deck}
+                onSelectSlide={(idx) => onSelectSlide(idx, version)}
+                insert={insert}
+              />
             </div>
           )}
         </div>

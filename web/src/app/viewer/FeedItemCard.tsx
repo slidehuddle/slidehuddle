@@ -13,6 +13,7 @@
 // The comment/flag thumbnails show the CURRENT version's slide at that index
 // (older-version HTML isn't loaded client-side) — fine as a deck anchor.
 
+import { useState } from "react";
 import type { ParsedDeck } from "./parse-deck";
 import type { FeedItem } from "./feed-items";
 import RelativeTime from "./RelativeTime";
@@ -172,8 +173,11 @@ function TypeChip({ kind }: { kind: "comment" | "stub" | "flag" }) {
   }[kind];
   const Icon = map.Icon;
   return (
+    // whitespace-nowrap + shrink-0: in a narrow feed column (the spectrum's
+    // split mode) the chip must keep its one-line size, not wrap into a taller
+    // pill ("Requested / slide" stacked).
     <span
-      className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold"
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold"
       style={{ backgroundColor: map.bg, color: map.color }}
     >
       <Icon color={map.color} />
@@ -223,6 +227,8 @@ export default function FeedItemCard({
   muted = false,
   onSelect,
   onAddressedClick,
+  curation = null,
+  currentRound = false,
 }: {
   item: Extract<FeedItem, { kind: "comment" | "stub" | "flag" }>;
   deck: ParsedDeck;
@@ -239,7 +245,23 @@ export default function FeedItemCard({
   onSelect: () => void;
   /** Jump to the version that addressed this item (the "✓ Addressed in vN" tag). */
   onAddressedClick?: (version: number) => void;
+  /** Owner curation on THIS card (spectrum, current round only — the standalone
+   *  feed stays read-only and passes nothing). Mirrors the comments panel's
+   *  controls (C3/C5/C7): hover reveals Dismiss (+ Edit for comments); a
+   *  dismissed card gains "· Restore". onEdit is null for stubs/flags (a flag
+   *  is just a removal note; a stub is edited on its own card). */
+  curation?: {
+    onDismiss: (dismissed: boolean) => Promise<void>;
+    onEdit: ((ownerEditedBody: string | null) => Promise<void>) | null;
+  } | null;
+  /** This card is in the CURRENT round → its outline is a light brand purple
+   *  (the live working set), clearly apart from the grey of settled history
+   *  (founder call 2026-07-03). Past rounds keep the grey border. */
+  currentRound?: boolean;
 }) {
+  // Owner inline edit (comments only): open state + the draft text.
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
   // Resolve WHO + the content + the anchor slide, per type.
   let who: { userId: string | null; email: string | null };
   let kind: "comment" | "stub" | "flag";
@@ -247,6 +269,9 @@ export default function FeedItemCard({
   let position = 0;
   let createdAt: string;
   let dismissed = false;
+  // The owner edited what's sent to the AI (comments/flags) → "· edited" tag,
+  // and the card shows the edited text — same rule as the panel (C3/C5).
+  let edited = false;
   let content: React.ReactNode;
   let thumb: React.ReactNode;
 
@@ -257,12 +282,13 @@ export default function FeedItemCard({
     slideIndex = c.slide_index;
     createdAt = c.created_at;
     dismissed = c.dismissed;
+    edited = c.owner_edited_body != null;
     thumb = (
       <RealSlideThumb deck={deck} srcDoc={slideSrcDocs[c.slide_index] ?? ""} slideNumber={c.slide_index + 1} removed={false} />
     );
     content = (
       <p className="text-sm leading-relaxed break-words whitespace-pre-wrap text-[#33333a]">
-        {c.body}
+        {c.owner_edited_body ?? c.body}
       </p>
     );
   } else if (item.kind === "stub") {
@@ -296,11 +322,14 @@ export default function FeedItemCard({
     slideIndex = f.slide_index;
     createdAt = f.created_at;
     dismissed = f.dismissed;
+    edited = f.owner_edited_reason != null;
     thumb = (
       <RealSlideThumb deck={deck} srcDoc={slideSrcDocs[f.slide_index] ?? ""} slideNumber={f.slide_index + 1} removed />
     );
-    content = f.reason?.trim() ? (
-      <p className="text-sm leading-relaxed text-[#33333a] break-words">{f.reason}</p>
+    content = (f.owner_edited_reason ?? f.reason)?.trim() ? (
+      <p className="text-sm leading-relaxed text-[#33333a] break-words">
+        {f.owner_edited_reason ?? f.reason}
+      </p>
     ) : (
       <p className="text-sm italic text-muted">No reason given.</p>
     );
@@ -331,8 +360,14 @@ export default function FeedItemCard({
           onSelect();
         }
       }}
-      className={`flex cursor-pointer flex-col gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition-all sm:flex-row ${
-        selected ? "ring-2 ring-brand" : "border border-border hover:border-black/20"
+      className={`group relative flex cursor-pointer flex-col gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition-all sm:flex-row ${
+        selected
+          ? "ring-2 ring-brand"
+          : currentRound
+            ? // Current round = the live working set: a light brand-purple
+              // outline, clearly apart from settled grey history.
+              "border border-[#D8D4F2] hover:border-[#B9B3E6]"
+            : "border border-border hover:border-black/20"
       } ${
         muted && !selected
           ? "[filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
@@ -345,13 +380,29 @@ export default function FeedItemCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <Avatar userId={who.userId} ownerId={deckOwnerId} email={who.email} size={28} />
+            <Avatar
+              userId={who.userId}
+              ownerId={deckOwnerId}
+              email={who.email}
+              // Your own cards carry your account identity (person icon +
+              // green dot), aligned with the stack (J8) and the account chip.
+              self={!!currentUserId && who.userId === currentUserId}
+              size={28}
+            />
             <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
               <span className="text-sm font-semibold text-[#1d1d1b]">{name}</span>
               {tags.length > 0 && (
                 <span className="text-xs font-medium text-muted">({tags.join(" · ")})</span>
               )}
               <span className="text-xs text-muted">· <RelativeTime iso={createdAt} /></span>
+              {edited && (
+                <span
+                  title="The owner edited what's sent to AI"
+                  className="text-[10px] text-muted shrink-0"
+                >
+                  · edited
+                </span>
+              )}
               <TypeChip kind={kind} />
             </div>
           </div>
@@ -359,11 +410,77 @@ export default function FeedItemCard({
             <SlidePill kind={kind} slideNumber={slideIndex + 1} position={position} />
           </div>
         </div>
-        <div className={`mt-1.5 ${struck ? "line-through opacity-60" : ""}`}>{content}</div>
+        {editing && item.kind === "comment" && curation?.onEdit ? (
+          // Owner inline editor — changes only what's sent to the AI, mirroring
+          // the panel's editor (C3). stopPropagation everywhere: the whole card
+          // is a click/key target, and typing must not select/navigate it.
+          <div
+            className="mt-1.5 flex flex-col gap-2"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <textarea
+              value={editDraft}
+              onChange={(e) => setEditDraft(e.target.value)}
+              rows={3}
+              maxLength={4000}
+              autoFocus
+              className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+            />
+            <p className="text-[11px] text-muted leading-snug">
+              Changes what&apos;s sent to AI — the original comment won&apos;t
+              change.
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={!editDraft.trim()}
+                onClick={async () => {
+                  const text = editDraft.trim();
+                  if (!text) return;
+                  await curation.onEdit!(text);
+                  setEditing(false);
+                }}
+                className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="text-xs text-muted hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className={`mt-1.5 ${struck ? "line-through opacity-60" : ""}`}>{content}</div>
+        )}
         {/* Resolution tag, its own line below the content (matches the design):
-            "✓ Addressed in vN →" (links to that version) or "Won't action". */}
+            "✓ Addressed in vN →" (links to that version) or "Won't send to AI"
+            (provider-neutral, matching the floating panel's curation wording —
+            founder decision 2026-07-02, was "Won't action"). With curation, a
+            dismissed card gains "· Restore" (owner only, like the panel). */}
         {dismissed ? (
-          <p className="mt-1.5 text-[11px] font-medium text-muted">Won&apos;t action</p>
+          <p className="mt-1.5 text-[11px] font-medium text-muted">
+            Won&apos;t send to AI
+            {curation && (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    curation.onDismiss(false);
+                  }}
+                  className="font-semibold text-foreground hover:underline"
+                >
+                  Restore
+                </button>
+              </>
+            )}
+          </p>
         ) : addressedIn ? (
           <button
             type="button"
@@ -379,6 +496,55 @@ export default function FeedItemCard({
           </button>
         ) : null}
       </div>
+
+      {/* Owner-only hover curation controls (spectrum, current round). Same
+          pattern as the panel's (C3): dark icon buttons over a left-to-right
+          white fade so the card's start stays readable. Hidden once dismissed
+          (Restore lives inline above) and while editing. */}
+      {curation && !dismissed && !editing && (
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end gap-1.5 rounded-r-xl pr-3 pl-12 opacity-0 transition-opacity group-hover:opacity-100"
+          style={{
+            background: "linear-gradient(to right, transparent, #ffffff 45%)",
+          }}
+        >
+          {item.kind === "comment" && curation.onEdit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditDraft(item.comment.owner_edited_body ?? item.comment.body);
+                setEditing(true);
+              }}
+              aria-label="Edit what's sent to AI"
+              title="Edit what's sent to AI"
+              className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+              style={{ backgroundColor: "rgba(90,90,95,0.7)" }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              curation.onDismiss(true);
+            }}
+            aria-label="Dismiss — won't send to AI"
+            title="Dismiss — won't send to AI"
+            className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
+            style={{ backgroundColor: "rgba(90,90,95,0.7)" }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z" />
+              <path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

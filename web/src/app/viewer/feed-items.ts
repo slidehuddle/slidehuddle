@@ -167,9 +167,22 @@ export type ConvItem = Extract<FeedItem, { kind: "comment" | "stub" | "flag" }>;
 export type FeedRound = {
   version: DeckVersionRow;
   isCurrent: boolean;
-  /** Conversation items during this round, oldest-first. */
+  /** Conversation items during this round, CLUSTERED BY SLIDE (the design
+   *  model's middle level: version → slide → time) — slide order first,
+   *  chronological within a slide. */
   items: ConvItem[];
 };
+
+// Where an item anchors in slide order, for the within-round slide clustering.
+// Comments/flags anchor to their (0-based) slide. A requested slide sits in the
+// GAP after slide `position` (1-based; 0 = before slide 1), i.e. between slide
+// indices position-1 and position → anchor position - 0.5, so it sorts after
+// that slide's own feedback and before the next slide's.
+function slideAnchor(item: ConvItem): number {
+  if (item.kind === "comment") return item.comment.slide_index;
+  if (item.kind === "flag") return item.flag.slide_index;
+  return item.stub.position - 0.5;
+}
 
 // The version that addressed a feedback item: the LATEST version created at/
 // before its resolved_at (clearAddressedFeedback stamps resolved_at just AFTER
@@ -257,6 +270,19 @@ export function buildVersionSpine(input: {
       item.addressedIn = { version: next.version, at: next.created_at };
     }
     rounds[idx].items.push(item);
+  }
+  // Within each round, cluster by SLIDE (design model level 2): slide order
+  // first, then chronological within a slide — so a slide-4 comment reads
+  // before an "after slide 8" request even if it was written later. Ties keep
+  // the stable kind/key fallback.
+  for (const round of rounds) {
+    round.items.sort(
+      (a, b) =>
+        slideAnchor(a) - slideAnchor(b) ||
+        a.at.localeCompare(b.at) ||
+        KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+        a.key.localeCompare(b.key),
+    );
   }
   return rounds;
 }

@@ -95,8 +95,24 @@ export function useDeckComments({
             setComments((prev) => prev.filter((c) => c.id !== oldRow.id));
           },
         )
-        .subscribe();
+        // Surface silent failures: without this callback a dead channel (auth
+        // expiry, network) just stops delivering with no trace.
+        .subscribe((status, err) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.error("[useDeckComments] realtime channel:", status, err?.message);
+          }
+        });
+      // Keep the Realtime socket authorized past the JWT's ~1h expiry: the
+      // browser client auto-refreshes the session, but the socket keeps the
+      // token it was given at mount — re-hand it the fresh one, or live sync
+      // silently dies in any tab left open longer than the token's lifetime.
+      const { data: authSub } = supabase.auth.onAuthStateChange(
+        (_event, freshSession) => {
+          if (freshSession) supabase.realtime.setAuth(freshSession.access_token);
+        },
+      );
       cleanup = () => {
+        authSub.subscription.unsubscribe();
         supabase.removeChannel(channel);
       };
     })();

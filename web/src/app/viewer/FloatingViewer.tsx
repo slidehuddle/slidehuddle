@@ -37,7 +37,9 @@ import CommentsPanel from "./CommentsPanel";
 import StubSlideView from "./StubSlideView";
 import SlideFlagControl from "./SlideFlagControl";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
+import FeedStream from "./FeedStream";
 import HuddleAvatars from "./HuddleAvatars";
+import HuddleFilterStack from "./HuddleFilterStack";
 import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import ArrivalBanner from "./ArrivalBanner";
 import type { ArrivalActivity } from "./arrival-activity";
@@ -46,6 +48,7 @@ import { useDeckStubs } from "./useDeckStubs";
 import { useDeckFlags } from "./useDeckFlags";
 import { useDeckVersionWatch } from "./useDeckVersionWatch";
 import { buildDisplayItems } from "./display-items";
+import type { ConvItem } from "./feed-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import AvatarMenu from "@/components/AvatarMenu";
@@ -53,6 +56,7 @@ import PortalPopover from "@/components/PortalPopover";
 import type {
   CommentRow,
   DeckParticipant,
+  DeckVersionRow,
   FlagRow,
   StubRow,
 } from "@/lib/slide-store";
@@ -79,6 +83,39 @@ const STRIP_W = 185; // left thumbnail strip width (w-[185px])
 const PANEL_W = 340; // right comments panel width (w-[340px])
 const STRIP_INSET = EDGE_GAP + STRIP_W + PANEL_GAP; // 213
 const PANEL_INSET = EDGE_GAP + PANEL_W + PANEL_GAP; // 368
+// ─────────────────────────────────────────────────────────────────────────
+
+// ── FEED↔DECK SPECTRUM (?view=spectrum) ───────────────────────────────────
+// The resizable left region's three resting ratios (fraction of the usable
+// stage width the feed/rail column claims) and the width below which that
+// column shows the thumbnail RAIL rather than the full feed. A drag snaps to
+// the nearest ratio.
+const SPECTRUM_SNAPS = [0.16, 0.4, 0.62] as const; // deck · split · feed
+const SPECTRUM_RAIL_MAX = 210; // px: narrower than this → rail; wider → full feed
+// The Huddlers filter stack (Slice 3): a floating vertical pill on the far left
+// in split/feed modes. The feed region shifts right to make room for it.
+const STACK_W = 46; // the stack pill's width
+const STACK_GAP = 8; // breathing room between the stack and the feed region
+// The three modes, mirrored in the `?mode=` URL param so version navigation
+// (which remounts the viewer) preserves the layout the user picked.
+const SPECTRUM_MODES = ["deck", "split", "feed"] as const;
+type SpectrumMode = (typeof SPECTRUM_MODES)[number];
+function modeToFrac(mode: string | null | undefined): number {
+  const i = mode ? (SPECTRUM_MODES as readonly string[]).indexOf(mode) : -1;
+  return i >= 0 ? SPECTRUM_SNAPS[i] : SPECTRUM_SNAPS[0];
+}
+function fracToMode(frac: number): SpectrumMode {
+  let best = 0;
+  let bestD = Infinity;
+  SPECTRUM_SNAPS.forEach((s, i) => {
+    const d = Math.abs(s - frac);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return SPECTRUM_MODES[best];
+}
 // ─────────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -131,6 +168,22 @@ type Props = {
    *  Open-deck link (?from=feed), "deck" otherwise. Stamped onto feedback_added
    *  + send_to_ai_clicked so feed-origin participation is measurable. */
   surface: "feed" | "deck";
+  /** When provided, the viewer renders the feed↔deck SPECTRUM (?view=spectrum):
+   *  the left region resizes from the thumbnail rail (deck mode) into the full
+   *  conversation feed (feed mode), reusing FeedStream. null/absent → the viewer
+   *  behaves EXACTLY as today (every existing call passes nothing). The feed
+   *  needs its own wider dataset: all-version comments + resolved-inclusive
+   *  stubs/flags + each version's HTML (loaded in page.tsx's spectrum branch). */
+  spectrumFeed?: {
+    versions: DeckVersionRow[];
+    comments: CommentRow[];
+    stubs: StubRow[];
+    flags: FlagRow[];
+    versionsHtml: Record<number, string>;
+    /** The split mode from `?mode=` (deck/split/feed) so the layout the user
+     *  picked survives a version navigation; null → default (deck). */
+    initialMode?: string | null;
+  } | null;
 };
 
 // The slides/thumbnails toggle icon: three 16:9 slide thumbnails stacked, the
@@ -229,6 +282,7 @@ export default function FloatingViewer({
   initialSlideIndex,
   deckOwnerId,
   surface,
+  spectrumFeed,
 }: Props) {
   const router = useRouter();
 
@@ -321,6 +375,24 @@ export default function FloatingViewer({
   const liveNewVersion = useDeckVersionWatch({ deckId, readOnly, viewingVersion });
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const [stripOpen, setStripOpen] = useState(false);
+
+  // ── Feed↔deck spectrum (?view=spectrum) ───────────────────────────────────
+  // On only when page.tsx passes the feed dataset (and it's a stored deck).
+  // feedFrac = the left region's share of the stage; starts in DECK mode so the
+  // surface opens looking like today's viewer. stageW is the measured stage
+  // width (set in the scale effect) used to turn feedFrac into pixels.
+  const spectrumOn = !!spectrumFeed && !!deckId;
+  // Init from the ?mode= param (persisted across version navigation), else deck.
+  const [feedFrac, setFeedFrac] = useState<number>(() =>
+    modeToFrac(spectrumFeed?.initialMode),
+  );
+  // The Huddlers-as-filter (Slice 3): which person the feed is filtered to.
+  // The filter only APPLIES while the stack is visible (split/feed) — in deck
+  // mode both vanish together, so a filter is never invisibly active; return
+  // to split/feed and it's showing again, chip and all (like the folded panel).
+  const [feedFilterUserId, setFeedFilterUserId] = useState<string | null>(null);
+  const [stageW, setStageW] = useState(0);
+  const draggingDividerRef = useRef(false);
 
   // Merge the real slides and the requested slides into one ordered, navigable
   // list (real slide indices stay stable, so comment slide_index values do too).
@@ -574,13 +646,47 @@ export default function FloatingViewer({
   // showing — e.g. comments open while a requested-slide card is active — does
   // not wrongly inset the slide. `isStored`/`showComments` are computed further
   // down, so we inline the equivalent conditions here (deckId / currentUserId).
-  const stripVisible = stripOpen && !!deckId;
+  const stripVisible = !spectrumOn && stripOpen && !!deckId;
+  // Spectrum: the resizable feed/rail column claims the left of the stage and the
+  // slide insets beside it. leftRegionW is feedFrac of the usable stage width;
+  // below SPECTRUM_RAIL_MAX it shows the thumbnail rail, above it the full feed.
+  const leftRegionW = spectrumOn
+    ? Math.round(Math.max(0, (stageW - EDGE_GAP * 2) * feedFrac))
+    : 0;
+  // Deck mode is ALWAYS the thumbnail rail; split/feed show the full feed —
+  // except on a very narrow window, where even feed mode falls back to the rail
+  // (a feed column below SPECTRUM_RAIL_MAX px is too cramped to read).
+  const spectrumRailMode =
+    fracToMode(feedFrac) === "deck" || leftRegionW < SPECTRUM_RAIL_MAX;
+  // The Huddlers filter stack shows only where the FEED shows (split/feed, not
+  // the rail) and only for signed-in viewers with participants (identities
+  // never reach anonymous viewers). When visible, everything left-side shifts
+  // right by its width.
+  const stackVisible =
+    spectrumOn && !spectrumRailMode && !!currentUserId && participants.length > 0;
+  const stackOffset = stackVisible ? STACK_W + STACK_GAP : 0;
+  // The filter is inert whenever its UI (the stack) is hidden.
+  const activeFeedFilter = stackVisible ? feedFilterUserId : null;
+  // FOLDING comments panel (Slice 2, design model §3): in FEED mode the feed
+  // is the whole point and the same comments are inline in it, so the panel is
+  // redundant — it FOLDS away. In SPLIT mode the slide is a real working
+  // surface, so the panel (and its Comments toggle) stays available (founder
+  // call, 2026-07-03). `commentsPanelOpen` is kept, so switching back returns
+  // the panel for the current slide. Narrow-window rail fallback (J1) also
+  // unfolds it — inline comments aren't visible on the rail.
+  const commentsFolded =
+    spectrumOn && fracToMode(feedFrac) === "feed" && !spectrumRailMode;
   const commentsVisible =
     commentsPanelOpen &&
+    !commentsFolded &&
     !!deckId &&
     !!currentUserId &&
     activeSlideIndex !== null;
-  const leftInset = stripVisible ? STRIP_INSET : 0;
+  const leftInset = spectrumOn
+    ? EDGE_GAP + stackOffset + leftRegionW + PANEL_GAP
+    : stripVisible
+      ? STRIP_INSET
+      : 0;
   const rightInset = commentsVisible ? PANEL_INSET : 0;
   // Keep the slide centred in the gap that's left: shift by half the difference
   // of the two insets (right panel only → shift left; left strip only → right).
@@ -597,6 +703,8 @@ export default function FloatingViewer({
       if (!stage) return;
       const r = stage.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
+      // Spectrum needs the live stage width to size the resizable left column.
+      setStageW(r.width);
       // Shrink the fit-box by whatever the open panels claim, so the slide never
       // renders underneath them. Clamp so a very narrow viewport can't drive the
       // available width to zero or negative.
@@ -705,6 +813,211 @@ export default function FloatingViewer({
     [canSendToAI, comments, flags, stubs],
   );
 
+  // ── Spectrum: LIVE feed data ──────────────────────────────────────────────
+  // The feed column must reflect live collaboration (a teammate's comment
+  // arriving over Realtime, your own dismiss/edit/insert) — not just the
+  // server-seeded page load. The live hooks above already track the CURRENT
+  // version (Realtime INSERT/UPDATE/DELETE, optimistic writes), so merge them
+  // over the seed:
+  //   comments — version-scoped: keep the seed's OTHER versions, replace the
+  //     viewing version's subset with the live set.
+  //   stubs/flags — the live sets are the deck's OPEN items: a seed row that's
+  //     unresolved but missing from live was DELETED (drop it); resolved seed
+  //     rows are frozen history (keep); live rows override/append (adds,
+  //     dismisses, edits). Skipped on a historical stage (readOnly: the hooks
+  //     are seeded empty there and Realtime is off — the seed is the truth).
+  const spectrumComments = useMemo(() => {
+    if (!spectrumFeed) return [];
+    if (readOnly) return spectrumFeed.comments;
+    return [
+      ...spectrumFeed.comments.filter((c) => c.version !== viewingVersion),
+      ...comments,
+    ];
+  }, [spectrumFeed, readOnly, viewingVersion, comments]);
+  const spectrumStubs = useMemo(() => {
+    if (!spectrumFeed) return [];
+    if (readOnly) return spectrumFeed.stubs;
+    const liveById = new Map(stubs.map((s) => [s.id, s]));
+    const seedIds = new Set(spectrumFeed.stubs.map((s) => s.id));
+    const merged = spectrumFeed.stubs
+      .filter((s) => s.resolved_at != null || liveById.has(s.id))
+      .map((s) => liveById.get(s.id) ?? s);
+    for (const s of stubs) if (!seedIds.has(s.id)) merged.push(s);
+    return merged;
+  }, [spectrumFeed, readOnly, stubs]);
+  const spectrumFlags = useMemo(() => {
+    if (!spectrumFeed) return [];
+    if (readOnly) return spectrumFeed.flags;
+    const liveById = new Map(flags.map((f) => [f.id, f]));
+    const seedIds = new Set(spectrumFeed.flags.map((f) => f.id));
+    const merged = spectrumFeed.flags
+      .filter((f) => f.resolved_at != null || liveById.has(f.id))
+      .map((f) => liveById.get(f.id) ?? f);
+    for (const f of flags) if (!seedIds.has(f.id)) merged.push(f);
+    return merged;
+  }, [spectrumFeed, readOnly, flags]);
+  // Per-person ACTIONABLE contribution counts for the filter stack (founder
+  // call 2026-07-03): the CURRENT round only — live comments on the latest
+  // version + open requested slides + open removal flags, excluding dismissed
+  // ("won't send to AI") and already-addressed items. These are the ones the
+  // next revision acts on; settled history stays visible in the feed but
+  // doesn't inflate the badges.
+  const contributionCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    const bump = (id: string | null) => {
+      if (id) m.set(id, (m.get(id) ?? 0) + 1);
+    };
+    for (const c of spectrumComments)
+      if (c.version === currentVersion && !c.dismissed) bump(c.user_id);
+    for (const s of spectrumStubs)
+      if (!s.dismissed && !s.resolved_at) bump(s.requested_by);
+    for (const f of spectrumFlags)
+      if (!f.dismissed && !f.resolved_at) bump(f.flagged_by);
+    return m;
+  }, [spectrumComments, spectrumStubs, spectrumFlags, currentVersion]);
+  // The AI's provenance for the stack's model mark: the latest version that
+  // recorded a source (a deck may mix models across versions; the most recent
+  // one is "who's working on it now"). null → the generic AI mark.
+  const spectrumAiSource = useMemo(() => {
+    if (!spectrumFeed) return null;
+    const withSource = spectrumFeed.versions
+      .filter((v) => v.source)
+      .sort((a, b) => b.version - a.version);
+    return withSource[0]?.source ?? null;
+  }, [spectrumFeed]);
+  // How many versions the AI has published — the purple badge on its mark.
+  // Matches the feed's semantics: v1 is "{owner} started this huddle"; every
+  // v2+ is an "AI published vN" event. Unique version numbers − 1, floor 0.
+  const spectrumAiVersionCount = useMemo(() => {
+    if (!spectrumFeed) return 0;
+    const unique = new Set(spectrumFeed.versions.map((v) => v.version));
+    return Math.max(0, unique.size - 1);
+  }, [spectrumFeed]);
+
+  // ── Spectrum interactions (?view=spectrum) ────────────────────────────────
+  // Clicking a feed item / version thumbnail focuses that real slide on the live
+  // stage (slide index → its display-item index, since stubs shift positions).
+  const focusSlideFromFeed = useCallback(
+    (slideIndex: number) => {
+      const idx = displayItems.findIndex(
+        (it) => it.kind === "slide" && it.slideIndex === slideIndex,
+      );
+      if (idx >= 0) setActiveIndex(idx);
+    },
+    [displayItems],
+  );
+  // A feed CARD was clicked. The spectrum stage renders stubs (unlike the feed's
+  // real-slide peek), so a REQUESTED slide focuses that stub CARD itself — not
+  // the slide it sits after. Comments/flags focus their real slide. (A stub not
+  // on the version currently shown — e.g. an addressed one — is a no-op.)
+  const onSelectFeedItem = useCallback(
+    (item: ConvItem, itemVersion: number) => {
+      // The slide this item points at: a requested slide → the slide it sits
+      // after; a comment/flag → its slide.
+      const slideIndex =
+        item.kind === "comment"
+          ? item.comment.slide_index
+          : item.kind === "flag"
+            ? item.flag.slide_index
+            : Math.max(0, item.stub.position - 1);
+      // Item from a DIFFERENT version than the stage (e.g. an older round, or an
+      // addressed request) → navigate to that version, staying in the spectrum +
+      // current mode, so the deck AND the version pill follow the round the item
+      // belongs to (instead of doing nothing / staying on the current version).
+      if (itemVersion !== viewingVersion) {
+        const vParam = itemVersion === currentVersion ? "" : `&v=${itemVersion}`;
+        router.push(
+          `/viewer?id=${deckId}&view=spectrum&mode=${fracToMode(feedFrac)}${vParam}&slide=${slideIndex}`,
+        );
+        return;
+      }
+      // Same version as the stage → focus in place. An OPEN requested slide
+      // focuses its stub CARD (not a neighbouring slide); otherwise the slide.
+      if (item.kind === "stub") {
+        const idx = displayItems.findIndex(
+          (it) => it.kind === "stub" && it.stub.id === item.stub.id,
+        );
+        if (idx >= 0) {
+          setActiveIndex(idx);
+          return;
+        }
+      }
+      focusSlideFromFeed(slideIndex);
+    },
+    [
+      viewingVersion,
+      currentVersion,
+      deckId,
+      feedFrac,
+      displayItems,
+      focusSlideFromFeed,
+      router,
+    ],
+  );
+  // A version-spine THUMBNAIL was clicked (it names a version). If it's the
+  // version already on the stage, just focus that slide. If it's a DIFFERENT
+  // version, navigate to it — STAYING in the spectrum (?view=spectrum) and
+  // opening on that slide — so the deck + the version pill update to that
+  // version (with the "older version" warning when it isn't the latest).
+  const onOpenVersionSlide = useCallback(
+    (slideIndex: number, version: number) => {
+      if (version === viewingVersion) {
+        focusSlideFromFeed(slideIndex);
+        return;
+      }
+      const vParam = version === currentVersion ? "" : `&v=${version}`;
+      // Carry the current split mode so navigating versions keeps the layout.
+      router.push(
+        `/viewer?id=${deckId}&view=spectrum${vParam}&mode=${fracToMode(feedFrac)}&slide=${slideIndex}`,
+      );
+    },
+    [viewingVersion, currentVersion, deckId, feedFrac, focusSlideFromFeed, router],
+  );
+  // The divider: drag to any ratio, release snaps to the nearest of the three
+  // resting points; arrow keys step between them. Pointer capture means the
+  // move/up events keep firing on the divider even as the cursor leaves it.
+  const nearestSnap = useCallback(
+    (f: number) =>
+      SPECTRUM_SNAPS.reduce((a, b) => (Math.abs(b - f) < Math.abs(a - f) ? b : a)),
+    [],
+  );
+  const onDividerDown = useCallback((e: React.PointerEvent) => {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    draggingDividerRef.current = true;
+  }, []);
+  const onDividerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!draggingDividerRef.current) return;
+      const st = stageRef.current?.getBoundingClientRect();
+      if (!st) return;
+      // The feed region starts after the edge gap + the filter stack (when
+      // shown), so subtract both for the drag to track the cursor.
+      const f =
+        (e.clientX - st.left - EDGE_GAP - stackOffset) /
+        Math.max(1, st.width - EDGE_GAP * 2);
+      setFeedFrac(Math.min(0.66, Math.max(0.06, f)));
+    },
+    [stackOffset],
+  );
+  const onDividerUp = useCallback(() => {
+    if (!draggingDividerRef.current) return;
+    draggingDividerRef.current = false;
+    setFeedFrac((f) => nearestSnap(f));
+  }, [nearestSnap]);
+  const onDividerKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      const i = SPECTRUM_SNAPS.indexOf(nearestSnap(feedFrac));
+      if (e.key === "ArrowLeft" && i > 0) {
+        e.preventDefault();
+        setFeedFrac(SPECTRUM_SNAPS[i - 1]);
+      } else if (e.key === "ArrowRight" && i < SPECTRUM_SNAPS.length - 1) {
+        e.preventDefault();
+        setFeedFrac(SPECTRUM_SNAPS[i + 1]);
+      }
+    },
+    [feedFrac, nearestSnap],
+  );
+
   // Shared frosted-pill look for the corner clusters. Fixed height so the two
   // top clusters match; no flex `gap` because spacing is managed per-item (and
   // some items collapse, taking their spacing with them). The clusters' shell
@@ -757,6 +1070,7 @@ export default function FloatingViewer({
                 onDelete={deleteStub}
                 onDismiss={dismissStub}
                 onEdit={editStub}
+                aiName="AI"
               />
             </div>
           ) : (
@@ -823,24 +1137,64 @@ export default function FloatingViewer({
                   aria-hidden="true"
                   className="mx-1.5 h-5 w-px bg-black/10 shrink-0"
                 />
-                <button
-                  type="button"
-                  data-floating-control
-                  onClick={() => {
-                    setStripOpen((o) => !o);
-                    reveal();
-                  }}
-                  aria-pressed={stripOpen}
-                  aria-label="Toggle the slides list"
-                  title="Slides"
-                  className={`h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center transition-colors ${
-                    stripOpen
-                      ? "bg-[#4A3FB5] text-white"
-                      : "text-[#6b6b75] hover:bg-black/[0.05]"
-                  }`}
-                >
-                  <SlidesStripIcon />
-                </button>
+                {spectrumOn ? (
+                  // Spectrum: a 3-way balance toggle replaces the slides button
+                  // (the left region is always present here, just resized). Drag
+                  // the divider for any ratio; these are the three snap points.
+                  <div
+                    role="group"
+                    aria-label="Feed and deck balance"
+                    className="inline-flex items-center gap-0.5 rounded-lg bg-black/[0.04] p-0.5 shrink-0"
+                  >
+                    {(
+                      [
+                        ["Feed", SPECTRUM_SNAPS[2]],
+                        ["Split", SPECTRUM_SNAPS[1]],
+                        ["Deck", SPECTRUM_SNAPS[0]],
+                      ] as const
+                    ).map(([label, frac]) => {
+                      const active = nearestSnap(feedFrac) === frac;
+                      return (
+                        <button
+                          key={label}
+                          type="button"
+                          data-floating-control
+                          onClick={() => {
+                            setFeedFrac(frac);
+                            reveal();
+                          }}
+                          aria-pressed={active}
+                          className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
+                            active
+                              ? "bg-[#4A3FB5] text-white"
+                              : "text-[#6b6b75] hover:bg-black/[0.06]"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-floating-control
+                    onClick={() => {
+                      setStripOpen((o) => !o);
+                      reveal();
+                    }}
+                    aria-pressed={stripOpen}
+                    aria-label="Toggle the slides list"
+                    title="Slides"
+                    className={`h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center transition-colors ${
+                      stripOpen
+                        ? "bg-[#4A3FB5] text-white"
+                        : "text-[#6b6b75] hover:bg-black/[0.05]"
+                    }`}
+                  >
+                    <SlidesStripIcon />
+                  </button>
+                )}
                 <Collapsible expanded={expanded} reducedMotion={reducedMotion}>
                   <span
                     aria-hidden="true"
@@ -852,6 +1206,11 @@ export default function FloatingViewer({
                     currentVersion={currentVersion}
                     viewingVersion={viewingVersion}
                     versions={versions}
+                    // Keep the spectrum AND the current split mode when switching
+                    // versions (don't drop back to the plain viewer / deck mode).
+                    // Undefined otherwise → plain /viewer.
+                    viewParam={spectrumOn ? "spectrum" : undefined}
+                    modeParam={spectrumOn ? fracToMode(feedFrac) : undefined}
                   />
                 </Collapsible>
               </>
@@ -871,24 +1230,25 @@ export default function FloatingViewer({
                   <span className="inline-flex items-center gap-2">
                     {/* "In this huddle" — who's part of the deck. Signed-in
                         viewers see real avatars; anonymous viewers get the
-                        name-free chip (no identities ever reach them). */}
+                        name-free chip (no identities ever reach them). In the
+                        SPECTRUM the huddle lives in the left filter stack
+                        instead (one element, not two — deck mode deliberately
+                        shows no huddle at all), so the cluster is suppressed. */}
                     {currentUserId ? (
-                      <HuddleAvatars
-                        participants={participants}
-                        currentUserId={currentUserId}
-                        ownerId={deckOwnerId}
-                      />
+                      spectrumOn ? null : (
+                        <HuddleAvatars
+                          participants={participants}
+                          currentUserId={currentUserId}
+                          ownerId={deckOwnerId}
+                        />
+                      )
                     ) : reviewingCount >= 1 ? (
                       <ReviewingChip count={reviewingCount} />
                     ) : (
                       <SharedDeckChip />
                     )}
                     {currentUserEmail ? (
-                      <AvatarMenu
-                        email={currentUserEmail}
-                        userId={currentUserId}
-                        ownerId={deckOwnerId}
-                      />
+                      <AvatarMenu email={currentUserEmail} />
                     ) : (
                       <Link
                         href={loginHref}
@@ -911,7 +1271,7 @@ export default function FloatingViewer({
                   </span>
                 </Collapsible>
 
-                {showComments && activeSlideIndex !== null && (
+                {showComments && activeSlideIndex !== null && !commentsFolded && (
                   // Bare at rest (no pill) — Comments only TOGGLE the panel, so
                   // it's the lightest control in the cluster: a teal speech-bubble
                   // (teal = the team) + the count. A green wash on hover; when the
@@ -958,11 +1318,7 @@ export default function FloatingViewer({
                 </span>
               </>
             ) : currentUserEmail ? (
-              <AvatarMenu
-                email={currentUserEmail}
-                userId={currentUserId}
-                ownerId={deckOwnerId}
-              />
+              <AvatarMenu email={currentUserEmail} />
             ) : (
               <Link
                 href={loginHref}
@@ -1041,7 +1397,7 @@ export default function FloatingViewer({
           {/* Side navigation arrows. They sit in the side margins; each simply
               hides when its side's panel is open (left arrow under the thumbnail
               strip, right arrow under the comments panel). */}
-          {!stripOpen && (
+          {!stripOpen && !spectrumOn && (
             <button
               type="button"
               onClick={goPrev}
@@ -1055,7 +1411,10 @@ export default function FloatingViewer({
               </svg>
             </button>
           )}
-          {!commentsPanelOpen && (
+          {/* Hidden only while the panel actually RENDERS (not merely toggled
+              on) — so it returns when the panel is folded (spectrum feed/split)
+              or not applicable (requested-slide card active). */}
+          {!commentsVisible && (
             <button
               type="button"
               onClick={goNext}
@@ -1083,7 +1442,11 @@ export default function FloatingViewer({
               "menu"); when bars are pinned, the chrome never fades at all. The
               wrapper carries the bottomFade; the menu is portaled to <body>, so
               it stays put even as the gear fades. */}
-          <div className={`absolute bottom-4 left-4 z-20 ${bottomFade}`}>
+          <div
+            className={`absolute bottom-4 ${
+              spectrumOn ? "right-4 z-40" : "left-4 z-20"
+            } ${bottomFade}`}
+          >
             <button
               ref={settingsRef}
               type="button"
@@ -1184,7 +1547,7 @@ export default function FloatingViewer({
               the panel itself is not tied to `expanded`, so it never fades. It
               reuses the existing CommentsPanel — only its positioning changes from
               a docked sidebar to this overlay. */}
-          {commentsPanelOpen && showComments && activeSlideIndex !== null && (
+          {commentsVisible && (
             // role="complementary" (a persistent side panel), NOT role="dialog"
             // — and no data-floating-control — so it does NOT hold the controls
             // expanded. The clusters still collapse on idle while this panel
@@ -1216,8 +1579,160 @@ export default function FloatingViewer({
                 onFlagDismiss={dismissFlag}
                 onClose={() => setCommentsPanelOpen(false)}
                 translucent
+                aiName="AI"
+                // I1 fix: the floating panel uses the SHARED <Avatar> (needs
+                // the owner id for its ring), so a person reads identically in
+                // the panel, the feed, and the stack. Classic keeps its local
+                // letter avatar (translucent=false → prop unused there).
+                deckOwnerId={deckOwnerId}
               />
             </div>
+          )}
+
+          {/* Feed↔deck SPECTRUM left region (?view=spectrum). One column, two
+              fidelities: the thumbnail RAIL when narrow (deck mode) and the full
+              conversation FEED (reusing FeedStream) when wide (feed mode). A
+              draggable divider on its right edge snaps deck · balanced · feed;
+              the slide insets beside it (leftInset) and shrinks to a peek. The
+              normal rail sliver + strip overlay are suppressed in this mode. */}
+          {spectrumOn && hasItems && deckId && (
+            <>
+              <div
+                aria-label={spectrumRailMode ? "Slides" : "Conversation feed"}
+                className="absolute top-[84px] bottom-4 z-30 overflow-hidden rounded-2xl border border-border bg-white/55 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+                style={{
+                  left: `${EDGE_GAP + stackOffset}px`,
+                  width: `${leftRegionW}px`,
+                  transition: reducedMotion
+                    ? undefined
+                    : "width 170ms ease, left 170ms ease",
+                }}
+              >
+                {spectrumRailMode ? (
+                  <div
+                    dir="rtl"
+                    className="thin-scrollbar absolute inset-y-2 left-1 right-0 overflow-y-auto overflow-x-hidden"
+                  >
+                    <FloatingThumbnailStrip
+                      deck={deck}
+                      items={displayItems}
+                      activeIndex={safeIndex}
+                      onSelect={setActiveIndex}
+                      commentCountBySlide={commentCountBySlide}
+                      showInsert={isStored && !readOnly}
+                      canInsert={canComment}
+                      loginHref={loginHref}
+                      onInsertStub={async (position, fields) => {
+                        const id = await insertStub(position, fields);
+                        if (id) setFocusStubId(id);
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <FeedStream
+                    className="absolute inset-0 overflow-y-auto px-2"
+                    rawHtml={rawHtml}
+                    currentVersion={currentVersion}
+                    versions={spectrumFeed!.versions}
+                    currentUserId={currentUserId}
+                    deckOwnerId={deckOwnerId}
+                    // LIVE data: the server seed merged with the Realtime
+                    // hooks, so a teammate's comment (or your own curation)
+                    // appears in the feed without a refresh.
+                    comments={spectrumComments}
+                    stubs={spectrumStubs}
+                    flags={spectrumFlags}
+                    versionsHtml={spectrumFeed!.versionsHtml}
+                    participants={participants}
+                    // The floating ArrivalBanner already covers "since you were
+                    // here", so the feed's own ribbon is suppressed (no double).
+                    arrivalActivity={null}
+                    onSelectItem={onSelectFeedItem}
+                    onSelectVersionSlide={onOpenVersionSlide}
+                    // "+" insert-between-slides at the FEED fidelity (D3): the
+                    // current version's spine strip gets the same insert the
+                    // rail has — same insertStub + jump-to-the-new-stub flow.
+                    // Hidden on historical views (readOnly), matching the rail.
+                    insert={
+                      isStored && !readOnly
+                        ? {
+                            canInsert: canComment,
+                            loginHref,
+                            onInsert: async (position, fields) => {
+                              const id = await insertStub(position, fields);
+                              if (id) setFocusStubId(id);
+                            },
+                          }
+                        : null
+                    }
+                    // Owner curation on current-round feed cards — the SAME
+                    // hook handlers the comments panel uses (one path; the live
+                    // merge above reflects each action instantly).
+                    curation={
+                      canCurate
+                        ? {
+                            dismissComment,
+                            editComment,
+                            dismissStub,
+                            dismissFlag,
+                          }
+                        : null
+                    }
+                    // Huddler filter (Slice 3): dim other people's cards + show
+                    // the "Showing {name}'s feedback" chip; ✕ clears.
+                    filterUserId={activeFeedFilter}
+                    onClearFilter={() => setFeedFilterUserId(null)}
+                  />
+                )}
+              </div>
+
+              {/* Draggable divider — drag for any ratio, release snaps to the
+                  nearest of deck · balanced · feed; arrow keys step between them. */}
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the conversation feed"
+                aria-valuemin={6}
+                aria-valuemax={66}
+                aria-valuenow={Math.round(feedFrac * 100)}
+                tabIndex={0}
+                data-floating-control
+                onPointerDown={onDividerDown}
+                onPointerMove={onDividerMove}
+                onPointerUp={onDividerUp}
+                onKeyDown={onDividerKey}
+                className="group absolute top-[84px] bottom-4 z-40 flex w-5 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center"
+                style={{
+                  left: `${EDGE_GAP + stackOffset + leftRegionW + PANEL_GAP / 2}px`,
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-12 w-1.5 rounded-full bg-[#4A3FB5] shadow transition-transform group-hover:scale-y-110"
+                />
+              </div>
+
+              {/* Huddlers-as-filter stack (Slice 3) — the far-left floating
+                  pill. Split/feed only (deck mode is focused commenting);
+                  anchored to the TOP (aligned with the feed region, founder
+                  call 2026-07-03); persistent (not tied to the chrome fade). */}
+              {stackVisible && (
+                <div className="absolute left-4 top-[84px] z-30">
+                  <HuddleFilterStack
+                    participants={participants}
+                    deckOwnerId={deckOwnerId}
+                    currentUserId={currentUserId}
+                    aiSource={spectrumAiSource}
+                    aiVersionCount={spectrumAiVersionCount}
+                    counts={contributionCounts}
+                    filterUserId={activeFeedFilter}
+                    onToggle={(id) =>
+                      setFeedFilterUserId((cur) => (cur === id ? null : id))
+                    }
+                  />
+                </div>
+              )}
+            </>
           )}
 
           {/* Rail SLIVER (design system §3.2/§4.1) — the rail's persistent
@@ -1226,7 +1741,7 @@ export default function FloatingViewer({
               teal dots, one per slide that has comments. Hover, tap, or press
               `T` opens the full thumbnail rail. Hidden only while that full rail
               is open (it takes the sliver's place). */}
-          {!stripOpen && deckId && hasItems && (
+          {!spectrumOn && !stripOpen && deckId && hasItems && (
             <button
               type="button"
               onClick={() => {
@@ -1266,7 +1781,7 @@ export default function FloatingViewer({
               request one. Toggled by the slides button; the slide stays full size
               behind it. data-floating-control + the open-panel guard keep the
               controls expanded while it's open. */}
-          {stripOpen && deckId && (
+          {!spectrumOn && stripOpen && deckId && (
             // Persistent side panel (no data-floating-control), so it does not
             // hold the controls expanded — the clusters still collapse on idle
             // while the strip stays. Width matches the collapsed top-left
