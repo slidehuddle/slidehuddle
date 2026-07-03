@@ -252,6 +252,7 @@ export default function StubSlideView({
   onDismiss,
   onEdit,
   actionsPlacement = "inline",
+  aiName = "Claude",
 }: {
   stub: StubRow;
   currentUserId: string | null;
@@ -268,6 +269,10 @@ export default function StubSlideView({
    *  by" badge (classic viewer); "bottom-right" = the floating viewer's
    *  hover-revealed corner control, matching the removal-flag "…". */
   actionsPlacement?: "inline" | "bottom-right";
+  /** Who the curation copy names ("Won't send to {aiName}"). The floating
+   *  viewer passes "AI" (provider-neutral, founder decision 2026-07-02); the
+   *  default keeps the classic viewer's "Claude" unchanged. */
+  aiName?: string;
 }) {
   // The person who requested the stub or the deck owner may edit or delete it.
   const canEdit =
@@ -332,7 +337,7 @@ export default function StubSlideView({
 
           {stub.dismissed && (
             <p className="text-xs text-muted self-start">
-              Won&apos;t send to Claude
+              Won&apos;t send to {aiName}
               {canCurate && (
                 <>
                   {" · "}
@@ -424,8 +429,8 @@ export default function StubSlideView({
           <button
             type="button"
             onClick={() => onDismiss?.(stub.id, true)}
-            aria-label="Dismiss — won't send to Claude"
-            title="Dismiss — won't send to Claude"
+            aria-label={`Dismiss — won't send to ${aiName}`}
+            title={`Dismiss — won't send to ${aiName}`}
             className="pointer-events-auto flex h-9 w-9 flex-col items-center justify-center gap-0.5 rounded-lg text-white shadow-md backdrop-blur-sm transition-transform hover:scale-105"
             style={{ backgroundColor: "rgba(40,40,38,0.7)" }}
           >

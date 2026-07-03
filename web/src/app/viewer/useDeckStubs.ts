@@ -95,8 +95,21 @@ export function useDeckStubs({
             setStubs((prev) => prev.filter((s) => s.id !== oldRow.id));
           },
         )
-        .subscribe();
+        // Surface silent failures (see useDeckComments — same rationale).
+        .subscribe((status, err) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.error("[useDeckStubs] realtime channel:", status, err?.message);
+          }
+        });
+      // Re-authorize the Realtime socket when the session token refreshes, or
+      // live sync silently dies after ~1h (see useDeckComments).
+      const { data: authSub } = supabase.auth.onAuthStateChange(
+        (_event, freshSession) => {
+          if (freshSession) supabase.realtime.setAuth(freshSession.access_token);
+        },
+      );
       cleanup = () => {
+        authSub.subscription.unsubscribe();
         supabase.removeChannel(channel);
       };
     })();

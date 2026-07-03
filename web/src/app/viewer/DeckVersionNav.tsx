@@ -22,6 +22,13 @@ type Props = {
   /** Version currently being viewed (== current unless browsing history). */
   viewingVersion: number;
   versions: VersionNavItem[];
+  /** The `?view=` value to preserve when switching versions (e.g. "spectrum"),
+   *  so selecting a version keeps the current surface instead of dropping back
+   *  to the default viewer. Omitted → plain `/viewer?id=…` (classic/floating). */
+  viewParam?: string;
+  /** The `?mode=` value (deck/split/feed) to preserve alongside the view, so a
+   *  version switch keeps the split ratio the user picked. Spectrum only. */
+  modeParam?: string;
 };
 
 function formatWhen(iso: string): string {
@@ -41,7 +48,14 @@ export default function DeckVersionNav({
   currentVersion,
   viewingVersion,
   versions,
+  viewParam,
+  modeParam,
 }: Props) {
+  // Preserve the current surface (e.g. ?view=spectrum) AND split mode across a
+  // version switch, so selecting a version stays put instead of resetting.
+  const viewSuffix =
+    (viewParam ? `&view=${viewParam}` : "") +
+    (modeParam ? `&mode=${modeParam}` : "");
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement>(null);
 
@@ -168,8 +182,8 @@ export default function DeckVersionNav({
                   <Link
                     href={
                       isCurrent
-                        ? `/viewer?id=${deckId}`
-                        : `/viewer?id=${deckId}&v=${v.version}`
+                        ? `/viewer?id=${deckId}${viewSuffix}`
+                        : `/viewer?id=${deckId}&v=${v.version}${viewSuffix}`
                     }
                     onClick={() => setOpen(false)}
                     aria-current={isViewing ? "true" : undefined}

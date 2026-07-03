@@ -2,18 +2,23 @@
 
 // The READ-ONLY conversation feed (P1.2) — an alternative LANDING surface for a
 // deck, gated per-account (FEED_PARTNER_EMAILS, see page.tsx). The conversation
-// is the content layer (a centred chronological stream of horizontal cards), and
-// the deck is DEMOTED to a right-hand "peek". It composes ONLY data we already
-// store — version events, comments, requested slides (stubs), removal flags.
+// is the content layer, and the deck is DEMOTED to a right-hand "peek". It
+// composes ONLY data we already store — version events, comments, requested
+// slides (stubs), removal flags.
+//
+// The feed COLUMN itself (version spine + cards + arrival ribbon + empty state)
+// now lives in the shared FeedStream component, so the very same column can be
+// reused in the floating viewer's feed↔deck spectrum (?view=spectrum) without a
+// second copy. This file is the standalone feed LANDING: a top bar + FeedStream
+// + the deck peek.
 //
 // Read-only: NO composer. People participate by opening the deck (the peek /
 // "Open slide N") and using the existing comment / request / flag controls;
-// their feedback then shows back up here. (Phase 3 brings threads/quoting/
-// decisions — out of scope.)
+// their feedback then shows back up here.
 //
-// Reuses: Avatar (the one avatar system), FeedItemCard (the one horizontal card),
-// DeckVersionNav, HuddleAvatars, the Reviewing/SharedDeck chips, parseDeck/
-// buildSrcdoc for the peek + the per-card slide thumbnails.
+// Reuses: FeedStream (the feed column), Avatar (via FeedStream), DeckVersionNav,
+// HuddleAvatars, the Reviewing/SharedDeck chips, parseDeck/buildSrcdoc for the
+// peek.
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,9 +31,7 @@ import {
 import HuddleAvatars from "./HuddleAvatars";
 import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import AvatarMenu from "@/components/AvatarMenu";
-import { buildVersionSpine, type ConvItem } from "./feed-items";
-import FeedItemCard from "./FeedItemCard";
-import VersionSpineEvent, { type AddressedSummary } from "./VersionSpineEvent";
+import FeedStream from "./FeedStream";
 import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import type {
   CommentRow,
@@ -85,25 +88,18 @@ export default function DeckFeed({
   arrivalActivity,
   loginHref,
 }: Props) {
-  // parseDeck uses DOMParser (browser only): SSR-empty, parse after mount.
+  // parseDeck uses DOMParser (browser only): SSR-empty, parse after mount. The
+  // feed column (FeedStream) parses its own copy for the cards; this one is for
+  // the deck PEEK on the right.
   const [deck, setDeck] = useState<ParsedDeck>(EMPTY_DECK);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDeck(parseDeck(rawHtml));
   }, [rawHtml]);
 
-  // Version spine: rounds, oldest-first. Each round = a version + the
-  // conversation that happened during it (indented under the spine event).
-  const rounds = useMemo(
-    () => buildVersionSpine({ versions, comments, stubs, flags }),
-    [versions, comments, stubs, flags],
-  );
-  const hasConversation = comments.length + stubs.length + flags.length > 0;
-  const currentRoundIndex = rounds.findIndex((r) => r.isCurrent);
   const slideCount = deck.slides.length;
 
-  // current-version slide srcDocs, indexed by slide index — built once and shared
-  // by every card thumbnail + the peek (so repeated slides don't re-render work).
+  // current-version slide srcDocs for the peek iframe (one per slide index).
   const slideSrcDocs = useMemo(
     () =>
       deck.slides.map((html) =>
@@ -112,52 +108,13 @@ export default function DeckFeed({
     [deck],
   );
 
-  // Parse each OTHER version's HTML for its spine thumbnail strip (the current
-  // version reuses `deck`). Browser-only (DOMParser) → in an effect, like `deck`.
-  const [parsedByVersion, setParsedByVersion] = useState<Map<number, ParsedDeck>>(
-    () => new Map(),
-  );
-  useEffect(() => {
-    const m = new Map<number, ParsedDeck>();
-    for (const [vStr, html] of Object.entries(versionsHtml)) {
-      const v = Number(vStr);
-      if (v === currentVersion || !html) continue;
-      m.set(v, parseDeck(html));
-    }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setParsedByVersion(m);
-  }, [versionsHtml, currentVersion]);
-  const deckForVersion = (v: number): ParsedDeck =>
-    v === currentVersion ? deck : parsedByVersion.get(v) ?? EMPTY_DECK;
-
-  // Items each version ADDRESSED (resolved), keyed by that version → the spine's
-  // "addressed N requests · M removals" + the "see changes" list.
-  const addressedByVersion = useMemo(() => {
-    const m = new Map<number, ConvItem[]>();
-    for (const round of rounds)
-      for (const it of round.items)
-        if (it.addressedIn) {
-          const arr = m.get(it.addressedIn.version) ?? [];
-          arr.push(it);
-          m.set(it.addressedIn.version, arr);
-        }
-    return m;
-  }, [rounds]);
-
-  // ── selection + peek ──────────────────────────────────────────────────────
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // ── peek selection ────────────────────────────────────────────────────────
+  // Which slide the peek shows. Driven by FeedStream via onSelectSlide (a feed
+  // card or a version thumbnail emits its real-slide index).
   const [peekIndex, setPeekIndex] = useState(0);
   const safePeek = slideCount > 0 ? Math.min(peekIndex, slideCount - 1) : 0;
 
-  function selectItem(item: ConvItem) {
-    setSelectedKey(item.key);
-    if (item.kind === "comment") setPeekIndex(item.comment.slide_index);
-    else if (item.kind === "flag") setPeekIndex(item.flag.slide_index);
-    else if (item.kind === "stub")
-      setPeekIndex(Math.max(0, item.stub.position - 1));
-  }
-
-  // ── per-slide stats (proper aggregation over the FULL datasets) ────────────
+  // ── per-slide stats for the peek (proper aggregation over the FULL datasets) ─
   const commentsBySlide = useMemo(() => {
     const m = new Map<number, number>();
     for (const c of comments) m.set(c.slide_index, (m.get(c.slide_index) ?? 0) + 1);
@@ -182,46 +139,6 @@ export default function DeckFeed({
   const peekRequested =
     (stubsByPosition.get(safePeek + 1) ?? 0) +
     (safePeek === 0 ? stubsByPosition.get(0) ?? 0 : 0);
-
-  // Resolve a version's publisher (created_by) → email, via the participant list,
-  // so the spine can name "requested by …" / the v1 owner. null when unknown.
-  const emailById = useMemo(() => {
-    const m = new Map<string, string | null>();
-    for (const p of participants) m.set(p.userId, p.email);
-    return m;
-  }, [participants]);
-
-  // Scroll plumbing for the version spine: the feed scroller + a ref per round so
-  // we can open at the current version and jump to an "✓ Addressed in vN" tag.
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const roundRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const setRoundRef = (v: number) => (el: HTMLDivElement | null) => {
-    if (el) roundRefs.current.set(v, el);
-    else roundRefs.current.delete(v);
-  };
-  const scrollToVersion = (v: number) =>
-    roundRefs.current.get(v)?.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  // Open at the CURRENT version: place its spine break ~15% below the top (a
-  // slice of the previous round shows above). If it's the first/only round
-  // (nothing above), stay at the top. Runs once, after layout.
-  const openedRef = useRef(false);
-  useEffect(() => {
-    if (openedRef.current) return;
-    if (currentRoundIndex <= 0) {
-      openedRef.current = true; // nothing earlier → top is correct
-      return;
-    }
-    const container = scrollRef.current;
-    const currentVer = rounds[currentRoundIndex]?.version.version;
-    const el = currentVer != null ? roundRefs.current.get(currentVer) : null;
-    if (!container || !el) return;
-    container.scrollTop +=
-      el.getBoundingClientRect().top -
-      container.getBoundingClientRect().top -
-      container.clientHeight * 0.15;
-    openedRef.current = true;
-  }, [rounds, currentRoundIndex, parsedByVersion]);
 
   // ── landing analytics (fire once) ─────────────────────────────────────────
   const firedRef = useRef(false);
@@ -331,134 +248,33 @@ export default function DeckFeed({
         </div>
       </div>
 
-      {/* BODY — feed column + deck peek */}
+      {/* BODY — feed column (shared FeedStream) + deck peek */}
       <div className="flex-1 min-h-0 flex gap-4 px-4 pb-4 overflow-hidden">
-        <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[760px] py-2 flex flex-col gap-3">
-            {arrivalActivity && (
-              <div
-                className="flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5"
-                style={{
-                  background:
-                    "linear-gradient(90deg, rgba(74,63,181,0.08), rgba(74,63,181,0.03))",
-                  borderColor: "rgba(74,63,181,0.18)",
-                }}
-              >
-                <p className="text-sm text-[#3a3590]">
-                  <span className="font-semibold">Since you were here:</span>{" "}
-                  {arrivalActivity.count}{" "}
-                  {arrivalActivity.count === 1 ? "new comment" : "new comments"}
-                  {arrivalActivity.names.length > 0 && (
-                    <span className="text-[#6b6b75]">
-                      {" "}· {arrivalActivity.names.slice(0, 3).join(", ")}
-                    </span>
-                  )}
-                </p>
-              </div>
-            )}
-
-            {/* Version SPINE: each round = a full-width version event + the
-                conversation that happened during it, indented under a thread
-                line. Oldest-first; opens scrolled to the current version. */}
-            {rounds.map((round, ri) => {
-              const v = round.version;
-              const addressed = addressedByVersion.get(v.version) ?? [];
-              const summary: AddressedSummary = {
-                comments: addressed.filter((i) => i.kind === "comment").length,
-                requests: addressed.filter((i) => i.kind === "stub").length,
-                removals: addressed.filter((i) => i.kind === "flag").length,
-                items: addressed.map((i) => ({ key: i.key, label: labelForItem(i) })),
-              };
-              const creatorEmail = v.created_by
-                ? emailById.get(v.created_by) ?? null
-                : null;
-              return (
-                <div key={`round-${v.version}`}>
-                  {/* "↑ earlier in this huddle" above the current round when
-                      there's older content above it. */}
-                  {round.isCurrent && currentRoundIndex > 0 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
-                      }
-                      className="mx-auto mb-2 flex items-center gap-1.5 rounded-full border border-border bg-white px-3 py-1 text-xs font-semibold text-muted shadow-sm transition-colors hover:text-foreground"
-                    >
-                      ↑ earlier in this huddle
-                    </button>
-                  )}
-                  <div ref={setRoundRef(v.version)} className="flex flex-col gap-2.5 scroll-mt-3">
-                    <VersionSpineEvent
-                      version={v.version}
-                      slideCount={v.slide_count}
-                      title={v.title}
-                      createdAt={v.created_at}
-                      isOpening={ri === 0}
-                      isCurrent={round.isCurrent}
-                      source={v.source}
-                      creatorUserId={v.created_by}
-                      creatorEmail={creatorEmail}
-                      deckOwnerId={deckOwnerId}
-                      deck={deckForVersion(v.version)}
-                      addressed={summary}
-                      onSelectSlide={(idx) => setPeekIndex(idx)}
-                    />
-                    {/* "Feed opens here" marker on the current round (only when
-                        there's earlier content above it). */}
-                    {round.isCurrent && currentRoundIndex > 0 && (
-                      <div className="flex items-center gap-2 pl-1 text-[11px] font-semibold uppercase tracking-wide text-brand">
-                        <span>▾ Feed opens here · since v{v.version}</span>
-                        <span className="h-px flex-1 bg-brand/30" />
-                      </div>
-                    )}
-                    {round.items.length > 0 && (
-                      <div className="ml-3 flex flex-col gap-2.5 border-l-2 border-black/[0.07] pl-3 sm:ml-5 sm:pl-4">
-                        {round.items.map((item) => (
-                          <FeedItemCard
-                            key={item.key}
-                            item={item}
-                            deck={deck}
-                            slideSrcDocs={slideSrcDocs}
-                            deckOwnerId={deckOwnerId}
-                            currentUserId={currentUserId}
-                            selected={selectedKey === item.key}
-                            // "Settled": an addressed/dismissed item in a PAST
-                            // round desaturates; unaddressed items (no addressedIn
-                            // & not dismissed) keep their colour so live threads
-                            // pop. The current round never mutes. (P1.2 Item A.)
-                            muted={
-                              !round.isCurrent &&
-                              (item.addressedIn != null || isItemDismissed(item))
-                            }
-                            onSelect={() => selectItem(item)}
-                            onAddressedClick={scrollToVersion}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {!hasConversation && (
-              <div className="rounded-2xl border border-dashed border-border bg-white/60 px-5 py-6 text-center">
-                <p className="text-sm font-semibold text-[#1d1d1b]">No conversation yet</p>
-                <p className="mt-1 text-sm text-muted">
-                  Open the deck to leave the first comment, request a slide, or flag
-                  one for removal — it&apos;ll show up here.
-                </p>
-                <Link
-                  href={deckHref}
-                  onClick={onOpenDeck}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
-                >
-                  Open deck
-                </Link>
-              </div>
-            )}
-          </div>
-        </div>
+        <FeedStream
+          rawHtml={rawHtml}
+          currentVersion={currentVersion}
+          versions={versions}
+          currentUserId={currentUserId}
+          deckOwnerId={deckOwnerId}
+          comments={comments}
+          stubs={stubs}
+          flags={flags}
+          versionsHtml={versionsHtml}
+          participants={participants}
+          arrivalActivity={arrivalActivity}
+          // The peek is a real-slide preview, so map a card to a real slide:
+          // comment/flag → its slide; a requested slide → the slide it sits after.
+          onSelectItem={(item) => {
+            if (item.kind === "comment") setPeekIndex(item.comment.slide_index);
+            else if (item.kind === "flag") setPeekIndex(item.flag.slide_index);
+            else setPeekIndex(Math.max(0, item.stub.position - 1));
+          }}
+          // Standalone feed: the peek is always the current version, so a version
+          // thumbnail just drives the peek to that slide index (no version switch).
+          onSelectVersionSlide={(idx) => setPeekIndex(idx)}
+          deckHref={deckHref}
+          onOpenDeck={onOpenDeck}
+        />
 
         {/* DECK PEEK */}
         <aside className="hidden lg:flex w-[320px] shrink-0 flex-col overflow-hidden rounded-2xl border border-border bg-white/70 backdrop-blur-md shadow-[0_10px_30px_rgba(20,20,19,0.10)]">
@@ -541,21 +357,4 @@ function StatRow({ label, color }: { label: string; color: string }) {
       {label}
     </span>
   );
-}
-
-// Whether a conversation item is dismissed ("Won't action") — the per-type
-// dismissed flag, used (with addressedIn) to decide the "settled" muting.
-function isItemDismissed(item: ConvItem): boolean {
-  if (item.kind === "comment") return item.comment.dismissed;
-  if (item.kind === "stub") return item.stub.dismissed;
-  return item.flag.dismissed;
-}
-
-// Short label for a resolved item in a version's "see changes" list.
-function labelForItem(item: ConvItem): string {
-  if (item.kind === "stub")
-    return `Requested: ${item.stub.title?.trim() || "Untitled slide"}`;
-  if (item.kind === "flag") return `Removal: slide ${item.flag.slide_index + 1}`;
-  const body = item.comment.body.trim();
-  return `Comment: ${body.length > 48 ? body.slice(0, 48) + "…" : body}`;
 }
