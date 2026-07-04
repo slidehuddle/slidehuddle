@@ -23,6 +23,22 @@ const INLINE_SLIDE_IFRAME_PATTERNS = [
 
 const isTopFrame = window.top === window;
 
+// Origin allowlist for cross-frame capture messages. The content script only
+// runs in Claude's own frames (see the manifest matches), but a `message` event
+// can be sent by ANY page that can reach one of our frames — e.g. a third-party
+// site that embeds a Claude artifact URL in an iframe. So every capture message,
+// request AND reply, is checked against this allowlist before we act on it, and
+// replies are addressed to the specific requesting origin rather than broadcast
+// with "*". Mirrors the manifest's Claude host patterns: claude.ai (and any
+// subdomain) plus the two artifact content domains. The leading-segment rule
+// (each subdomain must end in a dot) means look-alikes like evilclaude.ai or
+// claude.ai.evil.com never match.
+const TRUSTED_ORIGIN_RE =
+  /^https:\/\/([a-z0-9-]+\.)*(claude\.ai|claudemcpcontent\.com|claudeusercontent\.com)$/i;
+function isTrustedClaudeOrigin(origin) {
+  return typeof origin === "string" && TRUSTED_ORIGIN_RE.test(origin);
+}
+
 // chrome.storage key for the conversation→deck map. Deck identity is bound to
 // the Claude conversation it was captured from: { [conversationId]: { deckId,
 // title, writeToken, updatedAt } }. This is how we decide, at capture time,
@@ -110,13 +126,24 @@ function installIframeHandler() {
     const data = event.data;
     if (!data || typeof data !== "object") return;
     if (data.__slidehuddle !== "capture") return;
+    // Only answer capture requests coming from a trusted Claude frame, and reply
+    // to that exact origin — never hand this frame's HTML to an arbitrary page
+    // that happened to postMessage us (that would be a cross-origin read the
+    // browser otherwise forbids).
+    if (!isTrustedClaudeOrigin(event.origin)) {
+      console.warn(
+        "[SlideHuddle/iframe] ignored capture request from untrusted origin:",
+        event.origin,
+      );
+      return;
+    }
     try {
       const html = captureBestHtmlFromHere();
       event.source?.postMessage({
         __slidehuddle: "capture-result",
         requestId: data.requestId,
         html,
-      }, "*");
+      }, event.origin);
       console.log(
         "[SlideHuddle/iframe] sent capture-result, length=" + html.length,
       );
@@ -127,7 +154,7 @@ function installIframeHandler() {
         requestId: data.requestId,
         html: "",
         error: String(err && err.message || err),
-      }, "*");
+      }, event.origin);
     }
   });
   console.log("[SlideHuddle/iframe] handler installed in", location.href);
@@ -306,6 +333,16 @@ function installCaptureReplyListener() {
     const data = event.data;
     if (!data || typeof data !== "object") return;
     if (data.__slidehuddle !== "capture-result") return;
+    // Only accept capture results from a trusted Claude frame — a forged reply
+    // from another origin (even one guessing the requestId) can't inject chosen
+    // HTML into a deck the user is about to create.
+    if (!isTrustedClaudeOrigin(event.origin)) {
+      console.warn(
+        "[SlideHuddle] ignored capture-result from untrusted origin:",
+        event.origin,
+      );
+      return;
+    }
     const cb = pendingCaptureRequests.get(data.requestId);
     if (!cb) return;
     pendingCaptureRequests.delete(data.requestId);

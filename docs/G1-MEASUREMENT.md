@@ -21,6 +21,7 @@ Gate G1 has **two separate claims**. Keep them separate — they're proved diffe
 1. **The "≥ half" proportion is partly unobservable.** PostHog sees in-product feedback; it is blind to feedback that reaches you via Slack, email, a call, or a screenshot. So the *proportion* cannot be computed from events alone — its denominator lives partly outside the product. The proportion comes from the **partner debrief (§7)**; the events **corroborate** the in-product half and tell you *where* it happened.
 2. **N is tiny (2–3 partners).** These are **directional** signals, not statistics. The debrief and your own observation carry the weight; the dashboard exists to keep them honest and to keep working as N grows. Don't over-read a funnel built on five sessions.
 3. **Set it up before partners arrive.** The point of doing this now is that round 1 is captured cleanly — not reconstructed afterward from memory.
+4. **The classic viewer (`?view=classic`) is analytics-blind — by decision.** The G1 events (`feedback_added` especially) fire only from the **floating viewer** (via its `useDeckComments` / `useDeckStubs` / `useDeckFlags` hooks) and the **feed**. The classic viewer's own comment/stub/flag handlers in `SlideViewer.tsx` fire **nothing**, so any feedback left via `?view=classic` is invisible to every G1 number and funnel. This is an **accepted gap, not a bug:** `SlideViewer.tsx` is frozen (never edited — project memory) pending the Phase-7 cutover, and the floating viewer is the default for everyone, so real partners don't land on classic unless they explicitly force the `?view=classic` escape hatch. **What this means for reading the gate:** treat a partner who used classic as *unmeasured*, not as *no feedback* — if a debrief (§7) reports in-product feedback the dashboard didn't capture, check whether they were on `?view=classic` before concluding the events undercount. If you ever see meaningful classic usage in `deck_landing_viewed{view:classic}`, that's the trigger to either retire classic or make instrumenting it the one sanctioned exception to the freeze. *(Flagged in the 2026-07-02 code-quality review as Q2.)*
 
 ---
 
@@ -39,7 +40,7 @@ Snake_case names and properties, PostHog convention. `distinct_id` = the Supabas
 | Event | Fires when | Key properties | Status |
 |---|---|---|---|
 | `deck_landing_viewed` | a deck page loads | `view` (feed\|deck), `deck_id`, `role` (owner\|collaborator\|anon), `version` | **exists** |
-| `feedback_added` | a comment, stub, or flag is created | `kind` (comment\|stub\|flag), **`surface` (feed\|deck)**, `deck_id`, `version`, `role` | **exists — add `surface` + `version` + `role`** |
+| `feedback_added` | a comment, stub, or flag is created **in the floating viewer or feed** (classic viewer does not fire — see §2.4) | `kind` (comment\|stub\|flag), **`surface` (feed\|deck)**, `deck_id`, `version`, `role` | **exists — add `surface` + `version` + `role`** |
 | `send_to_ai_clicked` | owner clicks Send to AI | `deck_id`, `item_count`, `surface` | **add** |
 | `version_published` | a new version is saved (MCP `update_deck` **or** extension update path) | `deck_id`, `version`, `source` (claude\|chatgpt\|null), `addressed_count` | **add (capture server-side)** |
 | `feed_open_deck` | partner switches feed → deck | `deck_id`, `from_version` | **exists** |
