@@ -207,6 +207,29 @@ function SlidesStripIcon() {
   );
 }
 
+// The Export-as-PDF icon: a plain download glyph (arrow into a tray). Quiet
+// grey, matching the strip toggle's weight — Share stays the only filled
+// action; Export is a deliberate, low-frequency read.
+function ExportIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M4 21h16" />
+    </svg>
+  );
+}
+
 // Horizontal collapse wrapper. Uses the grid `1fr → 0fr` trick so its auto-width
 // content animates smoothly to zero — and because the inner cell clips
 // horizontally, a styled button inside (with its own padding/border) is
@@ -1212,6 +1235,31 @@ export default function FloatingViewer({
                     viewParam={spectrumOn ? "spectrum" : undefined}
                     modeParam={spectrumOn ? fracToMode(feedFrac) : undefined}
                   />
+                  {/* Export-as-PDF (P0.5). Lives WITH the title/version chip so
+                      it collapses away at rest (founder placement call
+                      2026-07-03) — and sitting beside the chip makes "you're
+                      exporting THIS version" self-evident. Opens the print view
+                      in a new tab; hidden while the deck has no slides. */}
+                  {deck.slides.length > 0 && (
+                    <a
+                      data-floating-control
+                      href={`/viewer/print?id=${deckId}&v=${viewingVersion}`}
+                      target="_blank"
+                      rel="noopener"
+                      onClick={() =>
+                        track("export_pdf_clicked", {
+                          deck_id: deckId,
+                          version: viewingVersion,
+                          surface,
+                        })
+                      }
+                      title={`Export v${viewingVersion} as PDF`}
+                      aria-label={`Export v${viewingVersion} as PDF`}
+                      className="ml-1 h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center text-[#6b6b75] hover:bg-black/[0.05] transition-colors"
+                    >
+                      <ExportIcon />
+                    </a>
+                  )}
                 </Collapsible>
               </>
             )}
