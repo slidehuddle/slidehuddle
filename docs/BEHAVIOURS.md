@@ -230,6 +230,16 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Trigger:** sample source; `viewingHistorical`.
 - **Source:** `viewer/page.tsx` ~lines 561–579.
 
+### B12. In-session comment nudge — live "you got a comment" toast ⭐ *(built 2026-07-04)*
+- **Element:** ONE transient toast, **bottom-right** (founder placement call; above the settings gear), shown when a **teammate's** comment lands via realtime while you're in the deck. Complements the cross-session arrival banner (B8) — this is the "we're both here right now" signal.
+- **Where:** floating viewer (all its shapes except spectrum feed mode). `CommentNudge.tsx`; wiring + suppression in `FloatingViewer.tsx`; the event via `useDeckComments`'s `onRemoteInsert`. Classic viewer: none (frozen).
+- **States:** appearing — fades + rises ~200ms (skipped under reduced motion) · showing — avatar(s) + text + teal **View** + grey ✕; **dissolves after ~7s**; hovering pauses the countdown · coalesced — a second/third comment arriving while one shows MERGES into the same toast and resets the timer (**never more than one toast** — they cannot stack over the slide) · gone — timer, ✕, or View.
+- **Behaviour:** the avatar is the shared `Avatar` (person colour + owner star apply). **View** jumps the deck to the newest comment's slide, opens the comments panel there, reveals the chrome, and dismisses the toast. ✕ dismisses instantly. Screen-reader: `role="status"`/`aria-live="polite"`.
+- **Copy (verbatim):** single — "**{Name}** commented on **slide {N}**" + "“{comment, truncated at 64 chars}”" · coalesced — "**{n} new comments** from {A} and {B}" / "from {A} and {n−1} others" · buttons "View", ✕ (aria "Dismiss").
+- **When it stays quiet:** your own comments (they echo back but you typed them) · **spectrum feed mode** (the card already pops into the visible live feed — no double signal) · the comments panel is open **on that same slide** (the comment appears right there) · historical/read-only views (no realtime) · anonymous viewers (no comment data reaches them).
+- **Trigger:** realtime INSERT on the viewed version from another user → `onRemoteInsert` → suppression check (via a ref — flags are computed later in the render) → coalescing append. Analytics: `comment_nudge_shown` {deck_id, slide_index}, `comment_nudge_clicked` {deck_id}.
+- **Source:** `CommentNudge.tsx` (whole file); `FloatingViewer.tsx` (nudge state + `nudgeCtxRef` + `viewNudge`); `useDeckComments.ts` (`onRemoteInsert`).
+
 ---
 
 # C. Comments & curation

@@ -34,6 +34,7 @@ import DeckVersionNav, { type VersionNavItem } from "./DeckVersionNav";
 import CopyLinkButton from "./CopyLinkButton";
 import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
+import CommentNudge, { type NudgeComment } from "./CommentNudge";
 import StubSlideView from "./StubSlideView";
 import SlideFlagControl from "./SlideFlagControl";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
@@ -371,6 +372,46 @@ export default function FloatingViewer({
     surface,
     role,
   });
+  // In-session comment nudge (B12): a teammate's comment arriving live shows
+  // ONE bottom-right toast; rapid arrivals COALESCE into it (never a stack).
+  // Suppressed where the comment is already visible the moment it lands:
+  // spectrum feed mode (the card pops into the live feed) and when the
+  // comments panel is open on that same slide. Those flags are computed later
+  // in the render, so the async callback reads them through a ref (kept fresh
+  // by an effect further down) — a realtime event always arrives post-render.
+  const [nudgeComments, setNudgeComments] = useState<NudgeComment[]>([]);
+  const dismissNudge = useCallback(() => setNudgeComments([]), []);
+  const nudgeCtxRef = useRef({
+    commentsFolded: false,
+    panelOpenOnSlide: null as number | null,
+  });
+  const onRemoteComment = useCallback(
+    (row: CommentRow) => {
+      const ctx = nudgeCtxRef.current;
+      if (ctx.commentsFolded) return;
+      if (ctx.panelOpenOnSlide !== null && row.slide_index === ctx.panelOpenOnSlide)
+        return;
+      setNudgeComments((prev) =>
+        prev.some((i) => i.id === row.id)
+          ? prev
+          : [
+              ...prev,
+              {
+                id: row.id,
+                userId: row.user_id,
+                email: row.author_email,
+                slideIndex: row.slide_index,
+                body: row.body,
+              },
+            ],
+      );
+      track("comment_nudge_shown", {
+        deck_id: deckId,
+        slide_index: row.slide_index,
+      });
+    },
+    [deckId],
+  );
   const { comments, addComment, deleteComment, dismissComment, editComment } =
     useDeckComments({
       deckId,
@@ -381,6 +422,7 @@ export default function FloatingViewer({
       initialComments,
       surface,
       role,
+      onRemoteInsert: onRemoteComment,
     });
   const { flags, addFlag, removeFlag, dismissFlag } = useDeckFlags({
     deckId,
@@ -705,6 +747,14 @@ export default function FloatingViewer({
     !!deckId &&
     !!currentUserId &&
     activeSlideIndex !== null;
+  // Keep the nudge's suppression context fresh (see the nudge block above —
+  // the realtime callback reads these through a ref, post-render).
+  useEffect(() => {
+    nudgeCtxRef.current = {
+      commentsFolded,
+      panelOpenOnSlide: commentsVisible ? activeSlideIndex : null,
+    };
+  }, [commentsFolded, commentsVisible, activeSlideIndex]);
   const leftInset = spectrumOn
     ? EDGE_GAP + stackOffset + leftRegionW + PANEL_GAP
     : stripVisible
@@ -929,6 +979,20 @@ export default function FloatingViewer({
     },
     [displayItems],
   );
+
+  // Nudge "View": jump the deck to the newest nudged comment's slide and open
+  // the comments panel there (unless it's folded — feed mode — where the toast
+  // never shows anyway). Reuses the feed's slide-focus mapping.
+  const viewNudge = () => {
+    const latest = nudgeComments[nudgeComments.length - 1];
+    if (latest) {
+      focusSlideFromFeed(latest.slideIndex);
+      setCommentsPanelOpen(true);
+      reveal();
+      track("comment_nudge_clicked", { deck_id: deckId });
+    }
+    setNudgeComments([]);
+  };
   // A feed CARD was clicked. The spectrum stage renders stubs (unlike the feed's
   // real-slide peek), so a REQUESTED slide focuses that stub CARD itself — not
   // the slide it sits after. Comments/flags focus their real slide. (A stub not
@@ -1393,6 +1457,20 @@ export default function FloatingViewer({
                 setCommentsPanelOpen(true);
                 reveal();
               }}
+            />
+          )}
+
+          {/* In-session comment nudge (B12) — a teammate commented while
+              you're here, live. One coalescing toast, bottom-right; mounted
+              only while items exist so its entrance/dissolve start fresh
+              per appearance. */}
+          {showComments && nudgeComments.length > 0 && (
+            <CommentNudge
+              items={nudgeComments}
+              deckOwnerId={deckOwnerId}
+              reducedMotion={reducedMotion}
+              onView={viewNudge}
+              onDismiss={dismissNudge}
             />
           )}
 

@@ -9,7 +9,7 @@
 // (ownership enforced server-side), and the same Realtime channel pattern.
 // The Phase-7 cutover removes this duplication when the old viewer is retired.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { setCommentCurationAction } from "./actions";
 import { track } from "@/lib/analytics";
 import type { CommentRow } from "@/lib/slide-store";
@@ -28,6 +28,11 @@ type Params = {
    *  started on, and this viewer's role. Stamped onto feedback_added. */
   surface: "feed" | "deck";
   role: "owner" | "collaborator" | "anon";
+  /** Fires when ANOTHER person's comment lands via realtime on the version
+   *  being viewed (own inserts are excluded — they echo back but the author
+   *  already knows). Powers the in-session comment nudge; held in a ref so a
+   *  changing callback never resubscribes the channel. */
+  onRemoteInsert?: (row: CommentRow) => void;
 };
 
 const COMMENT_COLS =
@@ -42,8 +47,16 @@ export function useDeckComments({
   initialComments,
   surface,
   role,
+  onRemoteInsert,
 }: Params) {
   const [comments, setComments] = useState<CommentRow[]>(initialComments);
+
+  // Latest callback without making it a channel-effect dependency (the
+  // subscription must not tear down/resubscribe on every render).
+  const onRemoteInsertRef = useRef(onRemoteInsert);
+  useEffect(() => {
+    onRemoteInsertRef.current = onRemoteInsert;
+  }, [onRemoteInsert]);
 
   // Live sync: subscribe to this deck's comment changes so a teammate's
   // add/edit/dismiss/delete shows up without a refresh. Current deck only
@@ -71,6 +84,10 @@ export function useDeckComments({
           (payload) => {
             const row = payload.new as CommentRow;
             if (row.version !== viewingVersion) return;
+            // A teammate's comment (own inserts echo back too — skip those;
+            // the optimistic path already showed them).
+            if (row.user_id !== currentUserId)
+              onRemoteInsertRef.current?.(row);
             setComments((prev) =>
               prev.some((c) => c.id === row.id) ? prev : [...prev, row],
             );
@@ -120,7 +137,7 @@ export function useDeckComments({
       cancelled = true;
       cleanup();
     };
-  }, [deckId, readOnly, viewingVersion]);
+  }, [deckId, readOnly, viewingVersion, currentUserId]);
 
   // Add a comment to a given slide (optimistic; reconciled on save).
   async function addComment(slideIndex: number, body: string) {
