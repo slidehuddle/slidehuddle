@@ -18,7 +18,17 @@ import PortalPopover from "./PortalPopover";
 // inside the button's bounds, so the collapsible top-right cluster (which
 // clips horizontally) can never slice it — the bug the shared Avatar's outer
 // owner-ring hit there.
-export default function AvatarMenu({ email }: { email: string }) {
+export default function AvatarMenu({
+  email,
+  viewerSettings = null,
+}: {
+  email: string;
+  /** Viewer-only (Slice C, 2026-07-05): the floating viewer passes its
+   *  "Pin toolbars" toggle so the setting lives in the account menu — the
+   *  stray bottom gear is retired. Other surfaces (dashboard, feed top bar)
+   *  omit it and see no settings section. */
+  viewerSettings?: { pinned: boolean; onTogglePin: () => void } | null;
+}) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -83,6 +93,41 @@ export default function AvatarMenu({ email }: { email: string }) {
           >
             My huddles
           </Link>
+          {viewerSettings && (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={viewerSettings.pinned}
+              onClick={viewerSettings.onTogglePin}
+              className="flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-black/[0.04]"
+            >
+              <span
+                aria-hidden="true"
+                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border"
+                style={
+                  viewerSettings.pinned
+                    ? {
+                        backgroundColor: "#4A3FB5",
+                        borderColor: "#4A3FB5",
+                        color: "#ffffff",
+                      }
+                    : { borderColor: "#c9c8d3", color: "transparent" }
+                }
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </span>
+              <span className="leading-snug">
+                <span className="block text-sm font-semibold text-[#1d1d1b]">
+                  Pin toolbars
+                </span>
+                <span className="block text-xs text-muted">
+                  Keep the floating bars from tucking away.
+                </span>
+              </span>
+            </button>
+          )}
           <form action="/auth/signout" method="post">
             <button
               type="submit"
