@@ -56,16 +56,18 @@ function ArrowDown() {
 }
 
 // ── thumbnail ───────────────────────────────────────────────────────────────
-function thumbBox(deck: ParsedDeck) {
+// `width` defaults to the card size; the slide-cluster header (FeedStream)
+// passes a slightly larger anchor size.
+function thumbBox(deck: ParsedDeck, width = THUMB_W) {
   const ar = (deck.slideWidth || 16) / (deck.slideHeight || 9);
-  return { width: THUMB_W, height: Math.round(THUMB_W / ar), scale: THUMB_W / (deck.slideWidth || 1) };
+  return { width, height: Math.round(width / ar), scale: width / (deck.slideWidth || 1) };
 }
 
-function SlidePlaceholder({ n, height }: { n: number; height: number }) {
+function SlidePlaceholder({ n, width, height }: { n: number; width: number; height: number }) {
   return (
     <div
       className="flex items-center justify-center rounded-lg border border-border bg-[#f6f6fa] text-[11px] font-semibold text-muted"
-      style={{ width: THUMB_W, height }}
+      style={{ width, height }}
     >
       Slide {n}
     </div>
@@ -73,19 +75,23 @@ function SlidePlaceholder({ n, height }: { n: number; height: number }) {
 }
 
 // A real-slide thumbnail (clean, or greyed-with-X for a removal flag).
-function RealSlideThumb({
+// Exported: the slide-cluster header (FeedStream) uses it as the cluster's
+// single anchor thumbnail.
+export function RealSlideThumb({
   deck,
   srcDoc,
   slideNumber,
   removed,
+  width: widthProp,
 }: {
   deck: ParsedDeck;
   srcDoc: string;
   slideNumber: number;
   removed: boolean;
+  width?: number;
 }) {
-  const { width, height, scale } = thumbBox(deck);
-  if (!srcDoc) return <SlidePlaceholder n={slideNumber} height={height} />;
+  const { width, height, scale } = thumbBox(deck, widthProp);
+  if (!srcDoc) return <SlidePlaceholder n={slideNumber} width={width} height={height} />;
   return (
     <div
       className="relative overflow-hidden rounded-lg border border-border bg-white"
@@ -122,18 +128,22 @@ function RealSlideThumb({
 // The requested-slide preview, rendered FROM ITS 3 INPUTS (no real slide exists
 // yet): a dashed-teal mini "slide" — title as a small heading, subtitle beneath,
 // body as a couple of muted lines. Evokes the slide, not a faithful render.
-function StubPreviewThumb({
+// Exported: a requested slide is its OWN cluster in the feed (FeedStream), and
+// this dashed treatment IS its identity in the cluster header.
+export function StubPreviewThumb({
   deck,
   title,
   subtitle,
   body,
+  width: widthProp,
 }: {
   deck: ParsedDeck;
   title: string | null;
   subtitle: string | null;
   body: string | null;
+  width?: number;
 }) {
-  const { width, height } = thumbBox(deck);
+  const { width, height } = thumbBox(deck, widthProp);
   return (
     <div
       className="flex flex-col gap-1 overflow-hidden rounded-lg p-2"
@@ -165,12 +175,22 @@ function StubPreviewThumb({
 }
 
 // ── small pieces ────────────────────────────────────────────────────────────
-function TypeChip({ kind }: { kind: "comment" | "stub" | "flag" }) {
-  const map = {
+// `settled` (addressed or dismissed — any round): the chip renders in greys
+// only, per the achromatic-history rule (design-system §2.5) — a settled item
+// never wears hue.
+function TypeChip({
+  kind,
+  settled = false,
+}: {
+  kind: "comment" | "stub" | "flag";
+  settled?: boolean;
+}) {
+  const live = {
     comment: { label: "Comment", color: "#0F6E56", bg: "#E1F5EE", Icon: IconComment },
     stub: { label: "Requested slide", color: "#0F6E56", bg: "#E1F5EE", Icon: IconStub },
     flag: { label: "Flag for removal", color: "#9A3412", bg: "#FBE9E1", Icon: IconFlag },
   }[kind];
+  const map = settled ? { ...live, color: "#52525B", bg: "#ECECEE" } : live;
   const Icon = map.Icon;
   return (
     // whitespace-nowrap + shrink-0: in a narrow feed column (the spectrum's
@@ -182,6 +202,35 @@ function TypeChip({ kind }: { kind: "comment" | "stub" | "flag" }) {
     >
       <Icon color={map.color} />
       {map.label}
+    </span>
+  );
+}
+
+// The bare type icon for the slide-cluster ROW layout (design-system §2.5:
+// pills are for status/interaction, not metadata — type is an icon in the
+// gutter). Live: the kind's actor colour; settled: grey.
+function TypeIcon({
+  kind,
+  settled,
+}: {
+  kind: "comment" | "stub" | "flag";
+  settled: boolean;
+}) {
+  const live = {
+    comment: { label: "Comment", color: "#0F6E56", Icon: IconComment },
+    stub: { label: "Requested slide", color: "#0F6E56", Icon: IconStub },
+    flag: { label: "Flag for removal", color: "#9A3412", Icon: IconFlag },
+  }[kind];
+  const color = settled ? "#52525B" : live.color;
+  const Icon = live.Icon;
+  return (
+    <span
+      className="mt-1 inline-flex shrink-0"
+      title={live.label}
+      role="img"
+      aria-label={live.label}
+    >
+      <Icon color={color} />
     </span>
   );
 }
@@ -229,6 +278,7 @@ export default function FeedItemCard({
   onAddressedClick,
   curation = null,
   currentRound = false,
+  layout = "card",
 }: {
   item: Extract<FeedItem, { kind: "comment" | "stub" | "flag" }>;
   deck: ParsedDeck;
@@ -239,8 +289,9 @@ export default function FeedItemCard({
   currentUserId: string | null;
   selected: boolean;
   /** "Settled" — an addressed/dismissed item in a PAST round. Desaturates the
-   *  whole card (avatar, chips, thumbnail, text) so live threads pop; hover or
-   *  selection returns it to colour. Decided upstream in DeckFeed. */
+   *  whole card (avatar, chips, thumbnail, text) so live threads pop. Hover /
+   *  selection only lift the dim for readability — hue never returns (the
+   *  one-way achromatic-history rule, §2.5). Decided upstream in DeckFeed. */
   muted?: boolean;
   onSelect: () => void;
   /** Jump to the version that addressed this item (the "✓ Addressed in vN" tag). */
@@ -258,6 +309,13 @@ export default function FeedItemCard({
    *  (the live working set), clearly apart from the grey of settled history
    *  (founder call 2026-07-03). Past rounds keep the grey border. */
   currentRound?: boolean;
+  /** "card" = the standalone boxed card (thumbnail left, type chip, slide
+   *  pill). "row" = a quiet line INSIDE a slide cluster (Slice B, 2026-07-05):
+   *  the cluster header already carries the thumbnail + slide identity, so the
+   *  row drops both and shows a bare type ICON in the gutter instead of the
+   *  chip (§2.5: pills are for status/interaction, not metadata). Everything
+   *  else — selection, muting, curation, resolution — behaves identically. */
+  layout?: "card" | "row";
 }) {
   // Owner inline edit (comments only): open state + the draft text.
   const [editing, setEditing] = useState(false);
@@ -360,22 +418,52 @@ export default function FeedItemCard({
           onSelect();
         }
       }}
-      className={`group relative flex cursor-pointer flex-col gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition-all sm:flex-row ${
-        selected
-          ? "ring-2 ring-brand"
-          : currentRound
-            ? // Current round = the live working set: a light brand-purple
-              // outline, clearly apart from settled grey history.
-              "border border-[#D8D4F2] hover:border-[#B9B3E6]"
-            : "border border-border hover:border-black/20"
+      className={`group relative flex cursor-pointer text-left transition-all ${
+        layout === "card"
+          ? `flex-col gap-3 rounded-xl bg-white p-3 shadow-sm sm:flex-row ${
+              selected
+                ? "ring-2 ring-brand"
+                : currentRound
+                  ? // Current round = the live working set: a light brand-purple
+                    // outline, clearly apart from settled grey history.
+                    "border border-[#D8D4F2] hover:border-[#B9B3E6]"
+                  : "border border-border hover:border-black/20"
+            }`
+          : // Row inside a slide cluster: quiet, un-boxed; hover washes, the
+            // selection ring still lands.
+            `gap-2.5 rounded-lg px-2 py-1.5 ${
+              selected ? "ring-2 ring-brand bg-white" : "hover:bg-black/[0.03]"
+            }`
       } ${
-        muted && !selected
-          ? "[filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
+        // Achromatic history (design-system §2.5, one-way rule): a settled
+        // card stays GREY even on hover/selection — hover only lifts the dim
+        // for readability; hue never returns.
+        muted
+          ? selected
+            ? "[filter:grayscale(1)]"
+            : "[filter:grayscale(1)_opacity(0.65)] hover:[filter:grayscale(1)_opacity(1)]"
           : ""
       }`}
-      style={kind === "flag" ? { borderLeft: "3px solid #C2410C" } : undefined}
+      style={
+        layout === "card" && kind === "flag"
+          ? { borderLeft: "3px solid #C2410C" }
+          : undefined
+      }
     >
-      <div className="shrink-0">{thumb}</div>
+      {/* Card: the item's own thumbnail. A settled (addressed/dismissed)
+          item's thumbnail loses its hue — the dashed-teal stub treatment and
+          the flag's red X are live-only identities (§2.5 achromatic history).
+          Row: the cluster header owns the thumbnail; the gutter carries a bare
+          type icon instead. */}
+      {layout === "card" ? (
+        <div
+          className={`shrink-0 ${struck ? "[filter:grayscale(1)_opacity(0.75)]" : ""}`}
+        >
+          {thumb}
+        </div>
+      ) : (
+        <TypeIcon kind={kind} settled={struck} />
+      )}
 
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
@@ -403,12 +491,16 @@ export default function FeedItemCard({
                   · edited
                 </span>
               )}
-              <TypeChip kind={kind} />
+              {layout === "card" && <TypeChip kind={kind} settled={struck} />}
             </div>
           </div>
-          <div className="shrink-0">
-            <SlidePill kind={kind} slideNumber={slideIndex + 1} position={position} />
-          </div>
+          {/* Slide identity is plain text in the cluster header now — the pill
+              only survives on the standalone card layout. */}
+          {layout === "card" && (
+            <div className="shrink-0">
+              <SlidePill kind={kind} slideNumber={slideIndex + 1} position={position} />
+            </div>
+          )}
         </div>
         {editing && item.kind === "comment" && curation?.onEdit ? (
           // Owner inline editor — changes only what's sent to the AI, mirroring
@@ -482,17 +574,25 @@ export default function FeedItemCard({
             )}
           </p>
         ) : addressedIn ? (
+          // Quiet grey (settled things never wear hue, §2.5); the jump arrow
+          // is the secondary affordance — revealed on hover and keyboard
+          // focus, underlined so the link is still discoverable.
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               onAddressedClick?.(addressedIn.version);
             }}
-            className="mt-1.5 text-[11px] font-semibold hover:underline"
-            style={{ color: "#0F6E56" }}
+            className="group/addr mt-1.5 text-[11px] font-semibold text-muted hover:underline focus-visible:underline"
             title={`Jump to v${addressedIn.version}`}
           >
-            ✓ Addressed in v{addressedIn.version} →
+            ✓ Addressed in v{addressedIn.version}
+            <span
+              aria-hidden="true"
+              className="ml-1 opacity-0 transition-opacity group-hover/addr:opacity-100 group-focus-visible/addr:opacity-100"
+            >
+              →
+            </span>
           </button>
         ) : null}
       </div>

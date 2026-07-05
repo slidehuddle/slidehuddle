@@ -30,7 +30,11 @@ import {
   type ParsedDeck,
 } from "./parse-deck";
 import { buildVersionSpine, type ConvItem } from "./feed-items";
-import FeedItemCard, { nameFromEmail } from "./FeedItemCard";
+import FeedItemCard, {
+  nameFromEmail,
+  RealSlideThumb,
+  StubPreviewThumb,
+} from "./FeedItemCard";
 import VersionSpineEvent, { aiName, type AddressedSummary } from "./VersionSpineEvent";
 import { AI_FILTER_ID } from "./HuddleFilterStack";
 import type {
@@ -151,6 +155,30 @@ export default function FeedStream({
       deck.slides.map((html) =>
         buildSrcdoc(html, deck.headHtml, deck.hasAuthoredStyles, { measure: false }),
       ),
+    [deck],
+  );
+
+  // Per-slide TITLES for the cluster headers (Slice B): the first heading in
+  // each slide's HTML, truncated. Best-effort — a slide with no heading shows
+  // just "Slide N". Client-only (DOMParser); deck starts EMPTY so this maps
+  // over [] during SSR.
+  const slideTitles = useMemo(
+    () =>
+      deck.slides.map((html) => {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const h = doc.querySelector("h1, h2, h3");
+        // textContent glues sibling elements together ("CompetitiveBenchmark");
+        // join the heading's text chunks with spaces instead.
+        const t = h
+          ? Array.from(h.childNodes)
+              .map((n) => n.textContent?.trim() ?? "")
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\s+/g, " ")
+          : "";
+        if (!t) return null;
+        return t.length > 60 ? t.slice(0, 60) + "…" : t;
+      }),
     [deck],
   );
 
@@ -425,57 +453,150 @@ export default function FeedStream({
                     <span className="h-px flex-1 bg-brand/30" />
                   </div>
                 )}
-                {round.items.filter((it) => !itemHidden(it)).length > 0 && (
-                  <div className="ml-3 flex flex-col gap-2.5 border-l-2 border-black/[0.07] pl-3 sm:ml-5 sm:pl-4">
-                    {round.items
-                      .filter((it) => !itemHidden(it))
-                      .map((item) => (
-                      <FeedItemCard
-                        key={item.key}
-                        item={item}
-                        deck={deck}
-                        slideSrcDocs={slideSrcDocs}
-                        deckOwnerId={deckOwnerId}
-                        currentUserId={currentUserId}
-                        selected={selectedKey === item.key}
-                        // "Settled": an addressed/dismissed item in a PAST
-                        // round desaturates; unaddressed items (no addressedIn
-                        // & not dismissed) keep their colour so live threads
-                        // pop. The current round never mutes. (P1.2 Item A.)
-                        muted={
-                          !round.isCurrent &&
-                          (item.addressedIn != null || isItemDismissed(item))
+                {/* SLIDE-ANCHORED CLUSTERS (Slice B, 2026-07-05): the round's
+                    items — already sorted slide-first, time-second (A2) —
+                    group into one cluster per slide: a header (the slide's
+                    thumbnail declared ONCE as the anchor + "Slide N · title"
+                    as plain text + a change count) with the items falling out
+                    beneath it on a quiet connector line as rows (bare type
+                    icon in the gutter, no chips/pills). A requested slide is
+                    its OWN cluster at its position — the dashed-teal preview
+                    IS its identity. */}
+                {(() => {
+                  const visible = round.items.filter((it) => !itemHidden(it));
+                  if (visible.length === 0) return null;
+                  const renderRow = (item: ConvItem) => (
+                    <FeedItemCard
+                      key={item.key}
+                      layout="row"
+                      item={item}
+                      deck={deck}
+                      slideSrcDocs={slideSrcDocs}
+                      deckOwnerId={deckOwnerId}
+                      currentUserId={currentUserId}
+                      selected={selectedKey === item.key}
+                      // "Settled": an addressed/dismissed item in a PAST
+                      // round desaturates; unaddressed items (no addressedIn
+                      // & not dismissed) keep their colour so live threads
+                      // pop. The current round never mutes. (P1.2 Item A.)
+                      muted={
+                        !round.isCurrent &&
+                        (item.addressedIn != null || isItemDismissed(item))
+                      }
+                      currentRound={round.isCurrent}
+                      onSelect={() => selectItem(item, v.version)}
+                      onAddressedClick={scrollToVersion}
+                      // Owner curation on current-round rows only (past
+                      // rounds are frozen history; only current items feed
+                      // the AI prompt). Maps this row's kind to the host's
+                      // hook handler; Edit is comments-only.
+                      curation={
+                        curation && round.isCurrent
+                          ? {
+                              onDismiss: (d) =>
+                                item.kind === "comment"
+                                  ? curation.dismissComment(item.comment.id, d)
+                                  : item.kind === "stub"
+                                    ? curation.dismissStub(item.stub.id, d)
+                                    : curation.dismissFlag(item.flag.id, d),
+                              onEdit:
+                                item.kind === "comment"
+                                  ? (t) => curation.editComment(item.comment.id, t)
+                                  : null,
+                            }
+                          : null
+                      }
+                    />
+                  );
+                  return (
+                    <div className="ml-3 flex flex-col gap-4 border-l-2 border-black/[0.07] pl-3 sm:ml-5 sm:pl-4">
+                      {buildSlideClusters(visible).map((cluster) => {
+                        if (cluster.kind === "stub") {
+                          const s = cluster.item.stub;
+                          const stubStruck =
+                            s.dismissed || cluster.item.addressedIn != null;
+                          const positionText =
+                            s.position <= 0
+                              ? "before slide 1"
+                              : `after slide ${s.position}`;
+                          return (
+                            <div key={`stub-${cluster.item.key}`} className="flex flex-col gap-1.5">
+                              <div className="flex items-start gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => selectItem(cluster.item, v.version)}
+                                  aria-label={`Requested slide, ${positionText} — peek`}
+                                  className={`shrink-0 rounded-lg transition-transform hover:scale-[1.02] ${
+                                    stubStruck
+                                      ? "[filter:grayscale(1)_opacity(0.75)]"
+                                      : ""
+                                  }`}
+                                >
+                                  <StubPreviewThumb
+                                    deck={deck}
+                                    title={s.title}
+                                    subtitle={s.subtitle}
+                                    body={s.body}
+                                    width={CLUSTER_THUMB_W}
+                                  />
+                                </button>
+                                <div className="min-w-0 pt-0.5">
+                                  <p className="text-sm font-semibold text-[#1d1d1b]">
+                                    Requested slide{" "}
+                                    <span className="font-normal text-muted">
+                                      · {positionText}
+                                    </span>
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="ml-2 flex flex-col gap-1 border-l-2 border-black/[0.05] pl-2 sm:ml-3 sm:pl-2.5">
+                                {renderRow(cluster.item)}
+                              </div>
+                            </div>
+                          );
                         }
-                        // Current-round cards get the light-purple outline (the
-                        // live working set vs grey settled history — founder
-                        // call 2026-07-03).
-                        currentRound={round.isCurrent}
-                        onSelect={() => selectItem(item, v.version)}
-                        onAddressedClick={scrollToVersion}
-                        // Owner curation on current-round cards only (past
-                        // rounds are frozen history; only current items feed
-                        // the AI prompt). Maps this card's kind to the host's
-                        // hook handler; Edit is comments-only.
-                        curation={
-                          curation && round.isCurrent
-                            ? {
-                                onDismiss: (d) =>
-                                  item.kind === "comment"
-                                    ? curation.dismissComment(item.comment.id, d)
-                                    : item.kind === "stub"
-                                      ? curation.dismissStub(item.stub.id, d)
-                                      : curation.dismissFlag(item.flag.id, d),
-                                onEdit:
-                                  item.kind === "comment"
-                                    ? (t) => curation.editComment(item.comment.id, t)
-                                    : null,
-                              }
-                            : null
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
+                        const n = cluster.slideIndex + 1;
+                        const title = slideTitles[cluster.slideIndex] ?? null;
+                        return (
+                          <div key={`slide-${cluster.slideIndex}`} className="flex flex-col gap-1.5">
+                            <div className="flex items-start gap-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSelectVersionSlide?.(cluster.slideIndex, currentVersion)
+                                }
+                                aria-label={`Slide ${n} — peek`}
+                                className="shrink-0 rounded-lg transition-transform hover:scale-[1.02]"
+                              >
+                                <RealSlideThumb
+                                  deck={deck}
+                                  srcDoc={slideSrcDocs[cluster.slideIndex] ?? ""}
+                                  slideNumber={n}
+                                  removed={false}
+                                  width={CLUSTER_THUMB_W}
+                                />
+                              </button>
+                              <div className="min-w-0 pt-0.5">
+                                <p className="truncate text-sm font-semibold text-[#1d1d1b]">
+                                  Slide {n}
+                                  {title && (
+                                    <span className="font-normal text-muted"> · {title}</span>
+                                  )}
+                                </p>
+                                <p className="mt-0.5 text-[11px] text-muted">
+                                  {clusterCountText(cluster.items)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="ml-2 flex flex-col gap-1 border-l-2 border-black/[0.05] pl-2 sm:ml-3 sm:pl-2.5">
+                              {cluster.items.map(renderRow)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           );
@@ -504,6 +625,44 @@ export default function FeedStream({
       </div>
     </div>
   );
+}
+
+// Slide-cluster anchor thumbnail — slightly larger than the old per-card
+// thumbnail (140), since it's declared once per cluster.
+const CLUSTER_THUMB_W = 168;
+
+// One cluster per slide (comments + flags on that slide, chronological), and
+// one cluster PER requested slide at its position. round.items is already
+// sorted by slide anchor then time (feed-items.ts, A2) — stubs sort between
+// slides at position − 0.5 — so grouping consecutive runs is exact.
+type SlideCluster =
+  | { kind: "slide"; slideIndex: number; items: ConvItem[] }
+  | { kind: "stub"; item: Extract<ConvItem, { kind: "stub" }> };
+
+function buildSlideClusters(items: ConvItem[]): SlideCluster[] {
+  const out: SlideCluster[] = [];
+  for (const it of items) {
+    if (it.kind === "stub") {
+      out.push({ kind: "stub", item: it });
+      continue;
+    }
+    const idx = it.kind === "comment" ? it.comment.slide_index : it.flag.slide_index;
+    const last = out[out.length - 1];
+    if (last && last.kind === "slide" && last.slideIndex === idx) last.items.push(it);
+    else out.push({ kind: "slide", slideIndex: idx, items: [it] });
+  }
+  return out;
+}
+
+// The cluster header's change count: "2 comments · 1 removal" (only non-zero
+// kinds; slide clusters never contain stubs).
+function clusterCountText(items: ConvItem[]): string {
+  const comments = items.filter((i) => i.kind === "comment").length;
+  const flags = items.filter((i) => i.kind === "flag").length;
+  const parts: string[] = [];
+  if (comments > 0) parts.push(`${comments} ${comments === 1 ? "comment" : "comments"}`);
+  if (flags > 0) parts.push(`${flags} ${flags === 1 ? "removal" : "removals"}`);
+  return parts.join(" · ");
 }
 
 // Whether a conversation item is dismissed ("Won't action") — the per-type
