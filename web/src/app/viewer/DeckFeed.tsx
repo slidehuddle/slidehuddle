@@ -32,6 +32,11 @@ import HuddleAvatars from "./HuddleAvatars";
 import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import AvatarMenu from "@/components/AvatarMenu";
 import FeedStream from "./FeedStream";
+import {
+  PersonColorProvider,
+  buildPersonColorAssignment,
+} from "./person-colors";
+import { useDeckPresence } from "./useDeckPresence";
 import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import type {
   CommentRow,
@@ -175,6 +180,16 @@ export default function DeckFeed({
   const deckHref = `/viewer?id=${deckId}&view=deck&from=feed`;
   const openSlideHref = `${deckHref}&slide=${safePeek}`;
 
+  // Live presence — green dots on the Huddlers cluster (signed-in only).
+  const onlineIds = useDeckPresence(deckId, currentUserId);
+  // The deck's per-huddle person-colour assignment (design-system §2.5) —
+  // same server-resolved join order as the floating viewer, so both surfaces
+  // paint every person identically.
+  const personColors = useMemo(
+    () => buildPersonColorAssignment(participants, deckOwnerId),
+    [participants, deckOwnerId],
+  );
+
   const peekScale = PEEK_W / (deck.slideWidth || 1);
   const peekHeight = Math.round((deck.slideHeight || 1) * peekScale);
   const peekSrc = slideSrcDocs[safePeek] ?? "";
@@ -183,6 +198,7 @@ export default function DeckFeed({
     "flex items-center h-[52px] rounded-2xl border border-black/[0.06] bg-white/80 px-2.5 shadow-[0_6px_22px_rgba(0,0,0,0.10)] backdrop-blur-md";
 
   return (
+    <PersonColorProvider value={personColors}>
     <div className="relative flex-1 min-w-0 min-h-0 flex flex-col bg-[#f6f6fa] overflow-hidden">
       {/* TOP BAR */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3">
@@ -214,6 +230,7 @@ export default function DeckFeed({
               participants={participants}
               currentUserId={currentUserId}
               ownerId={deckOwnerId}
+              onlineIds={onlineIds}
             />
           ) : reviewingCount >= 1 ? (
             <ReviewingChip count={reviewingCount} />
@@ -342,6 +359,7 @@ export default function DeckFeed({
         </aside>
       </div>
     </div>
+    </PersonColorProvider>
   );
 }
 

@@ -77,31 +77,32 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Source:** `VersionSpineEvent.tsx` (whole file); labels from `DeckFeed.tsx` `labelForItem`.
 - **Observation:** per the tracker, the headline used to be "✦"; it's now "🎉", and the AI mark uses the real Claude/ChatGPT logo (see G7).
 
-### A4. Past-round greyed items, colour-on-hover ⭐ *(explicitly confirmed)*
+### A4. Past-round greyed items — achromatic history ⭐ *(explicitly confirmed; one-way rule 2026-07-04)*
 - **Element:** "settled history" treatment — past, resolved conversation desaturates so live threads pop.
 - **Where:** feed cards + version events. `DeckFeed.tsx` (`muted` prop) + `FeedItemCard.tsx` + `VersionSpineEvent.tsx`.
-- **States:** default (colour) · muted (greyed) · hover/selected (restored to colour).
-- **Behaviour:** a **past-round version event** always desaturates (`grayscale(1) opacity(0.65)`). A **feed item card** desaturates **only if it's in a past round AND is addressed or dismissed** — unaddressed comments, requests, *and* flags stay in colour even in past rounds. The **current round never mutes.** **Hovering** a greyed element (or selecting a card) snaps it back to full colour.
-- **Trigger:** `muted = !round.isCurrent && (item.addressedIn != null || isItemDismissed(item))`; version events keyed off `isCurrent`. Hover via CSS `hover:[filter:none]`; cards also un-mute when `selected`.
-- **Source:** `DeckFeed.tsx` ~lines 426–436; `FeedItemCard.tsx` ~lines 334–340; `VersionSpineEvent.tsx` ~lines 129–137.
+- **States:** default (colour) · muted (greyed) · hover/selected (dim lifts — **greys stay**).
+- **Behaviour:** a **past-round version event** always desaturates (`grayscale(1) opacity(0.65)`). A **feed item card** desaturates **only if it's in a past round AND is addressed or dismissed** — unaddressed comments, requests, *and* flags stay in colour even in past rounds. The **current round never mutes.** **Hover/selection lift the dim for readability but never restore hue** — settled things may never wear colour again (design-system §2.5 achromatic-history rule; the pre-2026-07-04 colour-on-hover restore is retired). *The muting condition itself is unchanged.*
+- **Trigger:** `muted = !round.isCurrent && (item.addressedIn != null || isItemDismissed(item))`; version events keyed off `isCurrent`. Hover/selected via `[filter:grayscale(1)_opacity(1)]` / `[filter:grayscale(1)]` (grayscale kept).
+- **Source:** `FeedStream.tsx` (`muted` computation); `FeedItemCard.tsx` (card class); `VersionSpineEvent.tsx` (event class).
 
-### A5. Feed item card (comment / requested slide / removal flag)
-- **Element:** one horizontal card per piece of feedback: slide thumbnail left · who+what middle · slide pill top-right. The whole card is the click target.
-- **Where:** indented under each round. `FeedItemCard.tsx`.
-- **States:** default · selected (purple ring) · muted (see A4) · struck (addressed/dismissed) · narrow-screen (thumbnail stacks above text) · (spectrum, owner, current round) hover-curation / editing — see **J7**. **Current-round cards carry a light brand-purple outline** (`#D8D4F2`, darker on hover) so the live working set reads clearly apart from the grey borders of settled history (founder call 2026-07-03); past rounds keep the grey border. The signed-in viewer's OWN cards show their account-identity avatar (person icon + green dot — G4's `self` rule).
-- **Behaviour:** clicking a card rings it (`ring-2 ring-brand`) and drives the deck peek to that slide. A **comment** shows the body — the **owner-edited text when one exists**, with a quiet "· edited" tag (same rule as the panel, C3) — + a real-slide thumbnail. A **requested slide** shows title/subtitle/body + a dashed-teal mini-preview rendered from those fields, labelled "Requested". A **removal flag** shows the reason (owner-edited when one exists, or "No reason given.") + a greyed, red-X'd slide thumbnail, and the card gets a rust left-border. The **type chip never wraps** (`whitespace-nowrap shrink-0`) — in a narrow column (the spectrum's split mode) it keeps its one-line size instead of growing into a two-line pill.
-- **Copy:** type chips "Comment" / "Requested slide" / "Flag for removal"; slide pill "Slide N" (comment/flag) or "After slide N" / "Before slide 1" (requested); author name + tags "(you)", "(owner)", or "(you · owner)"; "· edited" (tooltip "The owner edited what's sent to AI"); "Untitled slide"; "No reason given."; mini-preview label "Requested"; "A teammate" (when an author email is missing).
-- **Trigger:** item kind; `selected` = this card's key matches selection; `currentUserId`/`deckOwnerId` decide the "(you)"/"(owner)" tags.
-- **Source:** `FeedItemCard.tsx` (whole file); `nameFromEmail` at the bottom.
+### A5. Slide-anchored clusters + feedback rows *(restructured 2026-07-05, Slice B — replaces the flat per-item cards)*
+- **Element:** within each round, feedback groups into **one cluster per slide**: a **header** — the slide's thumbnail declared ONCE as the anchor (168px, slightly larger than the old per-card 140px), **"Slide N · {title}" as plain text** (title = the slide's first heading, best-effort; no pill), and a change count ("2 comments · 1 removal") — with the items **falling out beneath it on a quiet connector line** as rows. A **requested slide is its OWN cluster at its position**: the dashed-teal "Requested" preview IS its identity (header text "Requested slide · after slide N" / "· before slide 1", plain text), its body as the row beneath.
+- **Where:** indented under each round. `FeedStream.tsx` (clustering + headers), `FeedItemCard.tsx` (`layout="row"`).
+- **Row anatomy:** a **bare type ICON in the gutter** (speech bubble = comment, flag = removal, plus-square = requested; the kind's colour when live, grey when settled — §2.5: pills are for status/interaction, not metadata; the old type chips and slide pills are gone from the feed) · avatar + name + tags + relative time + "· edited" · the text. A comment shows the **owner-edited text when one exists** (C3); a flag shows the reason or "No reason given.".
+- **States (per row):** default · hover (soft wash) · selected (purple ring) · muted (see A4) · struck (addressed/dismissed — the stub cluster's dashed header thumbnail also greys then) · (spectrum, owner, current round) hover-curation / editing — see **J7**. The signed-in viewer's OWN rows show their account-identity avatar (person icon + green dot — G4's `self` rule). *(The current-round purple card outline retired with the boxed cards; the round's position under the current version event carries "live".)*
+- **Behaviour:** clicking a **row** rings it and drives the deck peek/stage to that item (unchanged from the old cards). Clicking a **cluster's header thumbnail** peeks that slide (current version); clicking a **stub cluster's dashed thumbnail** selects the request itself. Ordering is unchanged (A2: slide order first, chronological within a slide; stubs slot at their position); clusters simply render that existing grouping. Muting rules, curation, timestamps all preserved per row.
+- **Copy:** header "Slide {N} · {title}" / "Requested slide · after slide {N}" / "· before slide 1"; count "{N} comment(s)( · {N} removal(s))"; gutter icon tooltips "Comment" / "Requested slide" / "Flag for removal"; author tags "(you)", "(owner)", "(you · owner)"; "· edited"; "Untitled slide"; "No reason given."; preview label "Requested"; "A teammate" (missing author email).
+- **Trigger:** clusters = consecutive runs of the round's already-slide-sorted items (`buildSlideClusters`); `selected` = the row's key matches selection.
+- **Source:** `FeedStream.tsx` (`buildSlideClusters`, `clusterCountText`, `slideTitles`, cluster render); `FeedItemCard.tsx` (`layout="row"`, `TypeIcon`, exported `RealSlideThumb`/`StubPreviewThumb`); `nameFromEmail` at the bottom. *(The boxed `layout="card"` variant still exists in `FeedItemCard.tsx` but no surface renders it.)*
 
 ### A6. Struck addressed/dismissed comments + "Addressed in vN" ⭐ *(explicitly confirmed)*
 - **Element:** the resolution state of a feed item.
 - **Where:** inside each feed card. `FeedItemCard.tsx`.
 - **States:** open · addressed (a later version handled it) · dismissed ("won't action").
-- **Behaviour:** when addressed **or** dismissed, the card body renders **struck-through and dimmed** (`line-through opacity-60`). Below it:
-  - addressed → a clickable teal link **"✓ Addressed in v{N} →"** that jumps the feed to that version (tooltip "Jump to vN").
+- **Behaviour:** when addressed **or** dismissed, the row's body renders **struck-through and dimmed** (`line-through opacity-60`), and the item goes **fully achromatic** (§2.5, 2026-07-04): the gutter type icon flips grey and the stub cluster's dashed-teal header thumbnail desaturates. Below the body:
+  - addressed → a **quiet grey** link **"✓ Addressed in v{N}"** that jumps the feed to that version (tooltip "Jump to vN"); the jump arrow **"→" appears on hover and keyboard focus** (underline too). *(Was a teal always-armed link — achromatic-history restyle 2026-07-04.)*
   - dismissed → plain muted text **"Won't send to AI"** (no link). *(Was "Won't action" — unified with the floating panel's provider-neutral curation wording, founder decision 2026-07-02; see I3.)* In the spectrum, the deck **owner** additionally gets **"· Restore"** on a current-round dismissed card (J7).
-- **Copy:** "✓ Addressed in v{N} →"; "Won't send to AI" (+ " · Restore" for the owner in the spectrum).
+- **Copy:** "✓ Addressed in v{N}" (+ "→" on hover/focus); "Won't send to AI" (+ " · Restore" for the owner in the spectrum).
 - **Trigger:** `addressedIn` is derived — a comment from a past round is treated as "addressed in v(next)"; requests/flags use their `resolved_at`. `dismissed` is the per-item owner flag.
 - **Source:** `FeedItemCard.tsx` ~lines 317–380; `feed-items.ts` `addressedRefFor` + comment-addressing logic ~lines 247–258.
 
@@ -173,12 +174,13 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Trigger:** shown once, then `localStorage` flag `sh-floating-hint-seen` suppresses it; auto-fades after ~6s.
 - **Source:** `FloatingViewer.tsx` ~lines 507–522, 1167–1178.
 
-### B5. Settings gear → "Pin floating bars"
-- **Where:** bottom-left of the floating viewer. **In the spectrum (`?view=spectrum`) it sits bottom-RIGHT instead**, because the resizable feed/rail column occupies the bottom-left (otherwise the gear is hidden behind it). `FloatingViewer.tsx`.
-- **Behaviour:** a gear button opens a small upward menu with one checkbox; when pinned, a purple dot sits on the gear and the bars stop tucking away.
-- **Copy:** menu item "Pin floating bars" / sub-text "Keep the controls from tucking away while you read."; button aria "Viewer settings".
-- **Trigger:** `pinned` state; `togglePin`.
-- **Source:** `FloatingViewer.tsx` ~lines 1079–1165.
+### B5. "Pin toolbars" — in the account avatar menu *(the stray settings gear RETIRED 2026-07-05, Slice C)*
+- **Where:** the account avatar menu, top-right (G2). The floating gear that used to sit alone at the bottom edge (bottom-left; bottom-right in the spectrum) is **removed** — it held exactly one setting, and §2.5 "position answers scope" puts user-level settings behind the user's identity, not floating in space. `AvatarMenu.tsx` (`viewerSettings` prop) + `FloatingViewer.tsx` (passes `pinned`/`togglePin`).
+- **Behaviour:** a checkbox item between "My huddles" and "Sign out"; when checked, the floating bars stop tucking away. Viewer-only — the dashboard/feed avatar menus don't show it.
+- **Copy:** menu item "Pin toolbars" / sub-text "Keep the floating bars from tucking away."
+- **Trigger:** `pinned` state; `togglePin`; `viewerSettings` passed only by the floating viewer.
+- **Caveat:** anonymous link-holders (no avatar menu) no longer have a pin control — hover/`T` still reveal the bars; acceptable until a need shows up.
+- **Source:** `AvatarMenu.tsx`; `FloatingViewer.tsx` (top-right cluster).
 
 ### B6. Rail sliver (left edge "fingerprints") ⭐
 - **Element:** the always-visible collapsed form of the thumbnail rail — a slim strip of teal dots, one per commented slide.
@@ -189,14 +191,11 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Trigger:** `commentedSlides`; `stripOpen`.
 - **Source:** `FloatingViewer.tsx` ~lines 1223–1262.
 
-### B7. Comments toggle
-- **Element:** opens/closes the comments panel for the current slide.
-- **Where:** top-right cluster (floating); top-right pill on the slide (classic).
-- **States:** closed · open (filled green) · hover (green wash) · with-count · hidden (on a requested slide; and in the spectrum's FEED mode, where the panel is folded — J6; it shows in deck + split).
-- **Behaviour:** **Floating:** a bare teal speech-bubble icon + count; green wash on hover; solid green + white when open. **Classic:** a rounded pill labelled "Comments" with a count badge; teal at rest, solid green when open. Hidden on requested slides (comments don't apply there yet).
-- **Copy:** floating aria "Comments (N)" / "Comments"; classic label "Comments" + count.
-- **Trigger:** `commentsPanelOpen` / `commentsOpen`; `currentSlideCommentCount`.
-- **Source:** `FloatingViewer.tsx` ~lines 914–954; `SlideViewer.tsx` ~lines 901–940.
+### B7. Comments toggle — *floating viewer's RETIRED 2026-07-05 (Slice C); classic keeps its pill*
+- **Element:** the old top-bar "💬 N" toggle for the comments panel.
+- **Floating viewer:** **removed, not relocated** — its job dissolved: in the spectrum the feed IS the comments surface; in deck view per-slide counts live on the thumbnails and the panel, and the panel now opens from the slide's **"+" menu → "Add a comment"** (B13), the arrival banner's "Catch up" (B8), and the comment nudge's "View" (B12). The panel's own **"Close comments" ✕** (C1) closes it, so nothing is orphaned.
+- **Classic viewer (frozen, unchanged):** a rounded pill labelled "Comments" with a count badge; teal at rest, solid green when open; hidden on requested slides. `SlideViewer.tsx` ~lines 901–940.
+- **Trigger (classic):** `commentsOpen`; per-slide count.
 
 ### B8. Arrival banner ("N comments since you were here")
 - **Element:** a returning signed-in viewer's "catch up" nudge.
@@ -231,14 +230,23 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Source:** `viewer/page.tsx` ~lines 561–579.
 
 ### B12. In-session comment nudge — live "you got a comment" toast ⭐ *(built 2026-07-04)*
-- **Element:** ONE transient toast, **bottom-right** (founder placement call; above the settings gear), shown when a **teammate's** comment lands via realtime while you're in the deck. Complements the cross-session arrival banner (B8) — this is the "we're both here right now" signal.
+- **Element:** ONE transient toast, **bottom-right** (founder placement call; the settings gear that used to sit there is retired, B5), shown when a **teammate's** comment lands via realtime while you're in the deck. Complements the cross-session arrival banner (B8) — this is the "we're both here right now" signal.
 - **Where:** floating viewer (all its shapes except spectrum feed mode). `CommentNudge.tsx`; wiring + suppression in `FloatingViewer.tsx`; the event via `useDeckComments`'s `onRemoteInsert`. Classic viewer: none (frozen).
 - **States:** appearing — fades + rises ~200ms (skipped under reduced motion) · showing — avatar(s) + text + teal **View** + grey ✕; **dissolves after ~7s**; hovering pauses the countdown · coalesced — a second/third comment arriving while one shows MERGES into the same toast and resets the timer (**never more than one toast** — they cannot stack over the slide) · gone — timer, ✕, or View.
-- **Behaviour:** the avatar is the shared `Avatar` (person colour + owner star apply). **View** jumps the deck to the newest comment's slide, opens the comments panel there, reveals the chrome, and dismisses the toast. ✕ dismisses instantly. Screen-reader: `role="status"`/`aria-live="polite"`.
+- **Behaviour:** the avatar is the shared `Avatar` (G3's fill/outline language applies). **View** jumps the deck to the newest comment's slide, opens the comments panel there, reveals the chrome, and dismisses the toast. ✕ dismisses instantly. Screen-reader: `role="status"`/`aria-live="polite"`.
 - **Copy (verbatim):** single — "**{Name}** commented on **slide {N}**" + "“{comment, truncated at 64 chars}”" · coalesced — "**{n} new comments** from {A} and {B}" / "from {A} and {n−1} others" · buttons "View", ✕ (aria "Dismiss").
 - **When it stays quiet:** your own comments (they echo back but you typed them) · **spectrum feed mode** (the card already pops into the visible live feed — no double signal) · the comments panel is open **on that same slide** (the comment appears right there) · historical/read-only views (no realtime) · anonymous viewers (no comment data reaches them).
 - **Trigger:** realtime INSERT on the viewed version from another user → `onRemoteInsert` → suppression check (via a ref — flags are computed later in the render) → coalescing append. Analytics: `comment_nudge_shown` {deck_id, slide_index}, `comment_nudge_clicked` {deck_id}.
 - **Source:** `CommentNudge.tsx` (whole file); `FloatingViewer.tsx` (nudge state + `nudgeCtxRef` + `viewNudge`); `useDeckComments.ts` (`onRemoteInsert`).
+
+### B13. The slide-scope "+" menu ("This slide") ⭐ *(built 2026-07-05, Slice C)*
+- **Element:** ONE purple "+" button on the slide (bottom-right corner, where the old "…" flag control sat; same hover-reveal) opening a small menu **labelled with its scope**: an uppercase "THIS SLIDE" eyebrow over three items — **Add a comment · Flag for removal · Request a slide after this**. Slide-scope actions live ON the slide (§2.5 "position answers scope"), not in the global chrome.
+- **Where:** floating viewer, real slides only, stored non-orphan decks, not on historical views. `SlideActionsMenu.tsx`; wired in `FloatingViewer.tsx`. Classic viewer: unchanged (keeps its "…" flag control, C6).
+- **States:** hidden-until-slide-hover (like the old "…") · menu · flag view · request view. Reopening always starts at the menu.
+- **Behaviour — every item reuses an EXISTING path, no new write features:** *Add a comment* → opens the comments panel (the existing composer, C2) and reveals the chrome. *Flag for removal* → swaps the popover to the shared `FlagPanel` (the exact C6 flow: sign-in prompt / reason form / existing-flag view with "Remove flag"; the item reads "Flagged for removal…" when a flag exists). *Request a slide after this* → swaps to the shared `InsertStubForm` (C9) and inserts at position {this slide + 1}, focusing the new stub card (same as the rail's "+", D3).
+- **Copy:** button title "This slide", aria "This slide — add a comment, flag for removal, or request a slide after it"; eyebrow "THIS SLIDE"; items "Add a comment" / "Flag for removal" (or "Flagged for removal…") / "Request a slide after this".
+- **Trigger:** `isStored && !readOnly && !isOrphanDeck`; per-action gates (`canFlag`, `canInsert`) handled inside the shared panels (sign-in prompts).
+- **Source:** `SlideActionsMenu.tsx` (whole file); `SlideFlagControl.tsx` (`FlagPanel`, shared); `InsertStubForm.tsx` (shared); `FloatingViewer.tsx` (wiring).
 
 ---
 
@@ -282,14 +290,14 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **Copy:** "Flagged for removal"; "by {name}"; "· edited"; "Won't send to {AI|Claude}" + "Restore"; Dismiss aria "Dismiss — won't send to {AI|Claude}". (Same `aiName` prop as C3: floating "AI", classic "Claude".)
 - **Source:** `CommentsPanel.tsx` ~lines 300–424.
 
-### C6. Slide flag-for-removal control ("…" menu)
-- **Element:** the subtle "…" on a real slide to flag it for removal.
-- **Where:** top-left of the slide (classic) / bottom-right (floating). `SlideFlagControl.tsx`.
+### C6. Slide flag-for-removal control ("…" menu) — *CLASSIC-only since 2026-07-05 (Slice C)*
+- **Element:** the subtle "…" on a real slide to flag it for removal. **In the floating viewer this standalone control folded into the slide's "+" menu (B13)**; the classic viewer keeps the "…" unchanged.
+- **Where:** top-left of the slide (classic). `SlideFlagControl.tsx`.
 - **States:** hidden-until-hover · not-signed-in · no-flag-yet (reason form) · already-flagged.
-- **Behaviour:** the "…" appears on slide hover. Opens a small popover: a reason textarea + rust "Flag for removal" button; if already flagged, shows the reason and (for the flagger) a "Remove flag"; if not signed in, a sign-in prompt.
+- **Behaviour:** the "…" appears on slide hover. Opens a small popover: a reason textarea + rust "Flag for removal" button; if already flagged, shows the reason and (for the flagger) a "Remove flag"; if not signed in, a sign-in prompt. The popover content is the exported **`FlagPanel`** — ONE copy shared with the "+" menu's flag view, so the two flows can never diverge.
 - **Copy:** "Why should this slide be removed?"; placeholder "Optional reason…"; "Flag for removal" / "Flagging…"; "Flagged for removal"; "Remove flag"; "Sign in to flag this slide for removal." + "Sign in".
 - **Trigger:** `canFlag`; `ownsFlag` (only the flagger can remove).
-- **Source:** `SlideFlagControl.tsx` (whole file).
+- **Source:** `SlideFlagControl.tsx` (whole file — `FlagPanel` + the "…" host).
 
 ### C7. Requested-slide ("stub") card
 - **Element:** a shared, editable draft slide standing in for one that doesn't exist yet — a white card with a dashed border.
@@ -382,7 +390,7 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 
 ### E3. Export as PDF — button + print view *(built 2026-07-03, revives P0.5)*
 - **Element:** a quiet grey **download icon** (arrow-into-tray) that exports the **version being viewed** as a PDF, plus the standalone print page it opens.
-- **Where:** floating viewer only, top-left cluster, **inside the same collapsible as the deck title + version chip** — immediately right of the `v{N}` chip (founder placement call 2026-07-03: it appears/disappears with the title on reveal/rest, and sitting beside the chip makes "you're exporting THIS version" self-evident). `FloatingViewer.tsx` (`ExportIcon` + the `<a>` after `DeckVersionNav`); the print page is `viewer/print/page.tsx` + `viewer/print/PrintView.tsx`. Classic viewer: none (frozen).
+- **Where:** floating viewer only, **top-RIGHT cluster** since 2026-07-05 (Slice C — export acts on the whole deck, so it lives in the deck-scope corner per §2.5 "position answers scope"; it previously sat top-left beside the version chip, the 2026-07-03 placement). Inside the collapsible group (huddle · export · Send to AI), left of Send to AI; still version-aware — the label follows the version being viewed. `FloatingViewer.tsx` (`ExportIcon` + the `<a>` in the top-right cluster); the print page is `viewer/print/page.tsx` + `viewer/print/PrintView.tsx`. Classic viewer: none (frozen).
 - **States (button):** rest — bare grey icon (`#6b6b75`), no fill · hover — soft dark wash (`hover:bg-black/[0.05]`) · collapsed — tucks away with the title/version chip when the floating controls rest · hidden — deck has no slides.
 - **Copy (button):** tooltip + aria-label **"Export v{N} as PDF"** (N = the version being viewed — scrub the lens to v5 and it reads "Export v5 as PDF").
 - **Behaviour (button):** opens `/viewer/print?id={deck}&v={viewingVersion}` in a **new tab** (the deck stays open); fires `export_pdf_clicked` {deck_id, version, surface}.
@@ -445,29 +453,30 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 
 ### G2. Account avatar menu *(restyled 2026-07-03)*
 - **Where:** top-right of nav / viewer clusters. `AvatarMenu.tsx`.
-- **Behaviour:** click opens a menu with the user's email, a link to the dashboard, and sign out. The chip itself is now **deliberately distinct from huddler avatars** (founder call 2026-07-03): a purple circle with a white **person icon** + a **green "signed in" dot** top-right (kept fully inside the button so clipping containers can't cut it) — the same everywhere (viewer, feed, dashboard). It reads as "your account — your door to your other huddles", not "you as a huddler" (that's the shared `Avatar` in the feed/stack). For your own avatar, "signed in" and "online" are the same fact, so the dot reuses the presence green (#3FA344).
+- **Behaviour:** click opens a menu with the user's email, a link to the dashboard, **"Pin toolbars" (viewer only — B5; added 2026-07-05, Slice C)**, and sign out. The chip itself is now **deliberately distinct from huddler avatars** (founder call 2026-07-03): a purple circle with a white **person icon** + a **green "signed in" dot** top-right (kept fully inside the button so clipping containers can't cut it) — the same everywhere (viewer, feed, dashboard). It reads as "your account — your door to your other huddles", not "you as a huddler" (that's the shared `Avatar` in the feed/stack). For your own avatar, "signed in" and "online" are the same fact, so the dot reuses the presence green (#3FA344).
 - **States:** rest · hover (brand ring wash) · menu open.
 - **Copy:** "My huddles"; "Sign out"; (the email row); chip tooltip/aria "{email} — signed in".
 - **Source:** `AvatarMenu.tsx`.
 - **History:** in a deck context this chip previously rendered the shared person-`Avatar`; after the G4 restyle its owner-ring (an outer box-shadow) was **clipped by the collapsible top-right cluster** ("cut in white", founder-reported 2026-07-03) — the distinct account chip also fixes that (nothing overhangs its bounds).
 
-### G3. Avatar (the one avatar component) ⭐ *(explicitly confirmed)*
+### G3. Avatar (the one avatar component) ⭐ *(restyled 2026-07-04 — design-system §2.5)*
 - **Element:** the single avatar used everywhere a person or the AI appears.
-- **Behaviour — two signals at a glance:**
-  - **Shape = role.** **Owner** → *filled* with a soft pastel of their colour + ink initials. **Collaborator** → *outline*: white fill + a 2px coloured ring + ink initials. **AI** → a dark circle with an amber sparkle (never reads as a teammate).
-  - **Colour = person.** Each person gets a deterministic colour from their id (stable everywhere). The palette deliberately avoids purple (brand), teal/green (comments), and amber (the AI).
+- **Behaviour — the signals at a glance:**
+  - **Fill = owner.** The deck owner is the one **FILLED purple circle** (white initials) — fill alone says owner; **no star, no ring** (the 2026-07-03 pastel-fill + owner-star treatment is retired). The owner's default tooltip still appends "· deck owner".
+  - **Outline + colour = collaborator.** Collaborators are **outline circles**: white fill, ring + initials in their assigned colour. Colours come from the **per-huddle join-order assignment** (`person-colors.tsx`): an OKLCH max-distance sequence (blue → crimson → green → magenta → azure → olive → rust → slate) that excludes the purple family (owner's) and the amber/orange family (the AI's); collaborator N in the deck's join order (server-resolved: share row / first comment) gets sequence[N], so early joiners are always maximally distinct. Rings clear ≥3:1, initials ≥4.5:1. Within one deck every surface paints a person identically (context provider per surface; deterministic hash fallback outside one).
+  - **You = the account identity** (`self`): person icon + green "signed-in" dot; owner-you is the filled purple circle, collaborator-you the light account purple. The green dot is the presence exception — the ONE state that wears colour.
+  - **AI** → a distinct dark circle + amber sparkle here (the feed/rail use `AiMark` — model logo / lilac AI square); never reads as a teammate.
   - **Initials** come from the display name if present, else the email local-part (trailing digits stripped); falls back to a person icon when there's truly nothing.
 - **Trigger:** the **owner decision lives only here** — callers pass `userId` + the deck's `ownerId`, and this component alone computes `owner = (userId === ownerId)` and renders filled vs outline, so no surface can disagree.
-- **Source:** `Avatar.tsx` (whole file).
+- **Source:** `Avatar.tsx` (whole file); `person-colors.tsx` (palette, assignment, context); `slide-store.ts` `getDeckParticipants` (`joinedAt`).
 
 ### G4. "Huddlers" people cluster + the avatar language *(restyled 2026-07-03)*
 - **Where:** floating viewer top-right + feed top bar. `HuddleAvatars.tsx`. **In the spectrum this cluster is SUPPRESSED** — the huddle lives in the left filter stack instead (J8, one element not two; deck mode deliberately shows no huddle at all). Your own account menu stays top-right everywhere.
-- **The avatar language (founder decision 2026-07-03 — softer, Google/Miro-like; the old "shape = role: owner filled / collaborator outline" rule is RETIRED):**
-  - **colour = person** — everyone gets a soft pastel fill of their deterministic colour with initials in that colour's ink; no heavy rings. Same person = same colour everywhere (feed cards, panel, stack, cluster).
-  - **a purple STAR, bottom-left = the deck owner** (2026-07-03 — an actual star shape with a thin white outline, no enclosing circle, **no ring**; the earlier owner ring was removed as unclear). The owner's default tooltip appends **"· deck owner"** to the email.
-  - **you = the account identity** (`Avatar self`, 2026-07-03): the signed-in viewer's OWN avatar renders as the purple person icon + green "signed in" dot (matching the account chip, G2) instead of initials — in the filter stack, on your feed cards, and in the floating panel — so "you" stand out and read the same everywhere. The owner ring still applies on top when you own the deck.
-  - **round teal count badge = contributions** (stack, J8); **green dot top-right = online now** is RESERVED in the anatomy — needs the presence system (parked), not yet rendered anywhere.
-  - the AI mark is unchanged (dark circle + amber sparkle — never reads as a teammate).
+- **The avatar language (restyled again 2026-07-04 — see G3 for the full anatomy; the 2026-07-03 pastel+star treatment is RETIRED):**
+  - **fill = owner** (the one filled purple circle, white initials — no star); **outline + assigned colour = collaborator** (per-huddle join-order palette, G3).
+  - **you = the account identity** (`Avatar self`): person icon + green "signed in" dot (matching the account chip, G2) — in the filter stack, on your feed cards, and in the comments panel (both skins — the panel's old local letter-avatar was retired 2026-07-04). Owner-you renders as the filled purple circle.
+  - **neutral grey count badge = contributions** (stack, J8); **green dot top-right = online now** — LIVE since 2026-07-05 on the roster surfaces (the presence system, G9).
+  - the AI mark is unchanged (never reads as a teammate).
   - All of this lives in the ONE shared `Avatar.tsx`; no surface computes role or colour itself.
 - **Behaviour (cluster, non-spectrum):** a count of everyone in the huddle (you included) + stacked avatars of the *others* (your own face is the account menu beside it). Up to 4 shown, then a "+N". A small teal speech-bubble marks anyone who has commented. This is "who's involved", not "who's viewing now".
 - **Copy:** "{N} Huddler" / "{N} Huddlers"; tooltip lists the roster; overflow "+N".
@@ -503,6 +512,15 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 - **PortalPopover:** all menus/forms/dropdowns render into a portal on `<body>` so they're never clipped by a scroll area or hidden under the sandboxed slide iframe. They flip above the anchor near the bottom edge, clamp on-screen, and dismiss on outside-click or Escape. `PortalPopover.tsx`.
 - **AnchoredToast:** transient toasts portal to `<body>` at a very high z-index so they're never hidden behind a floating panel; they pin just under their anchor and fade out. `AnchoredToast.tsx`.
 - **RelativeTime:** relative timestamps render **blank during SSR and the first client paint**, then the real value once hydrated (avoids a hydration mismatch). `RelativeTime.tsx`.
+
+### G9. Presence — the "online now" green dot ⭐ *(built 2026-07-05; was reserved in the rail's anatomy)*
+- **Element:** a tiny green dot (`#3FA344`, white ring) on the edge of a huddler's avatar while they have **this deck open right now** — the presence exception, the ONE state allowed to wear colour (§2.5 rule 3). Disappears when they leave.
+- **Where:** the ROSTER surfaces only — the huddler rail (J8) and the top-right Huddlers cluster (G4). Deliberately NOT on feed cards or panel comments (historical records; a live signal there misleads). Tooltips append "· online now". Your own avatar keeps its always-on dot (`self` — signed-in and online are the same fact for you). The AI never gets a dot; the invite seat never gets one.
+- **Dot only (founder call 2026-07-05):** no offline dimming — dimming keeps its one meaning, "silent this round" (J8). A silent-but-online member reads dimmed WITH a dot (here, but hasn't contributed).
+- **Behaviour:** everyone signed-in viewing a deck joins the Supabase Realtime **Presence** room `presence:deck:{id}` and announces their **user id + a freshness timestamp**, re-announced every 30s. Readers show a dot for entries stamped within the last 75s. Clean leaves (tab close, navigation) clear within seconds; an abrupt death (crash, laptop lid) clears in ≤ ~90s via the freshness window even if the server's phantom entry lingers (observed in verification — the TTL exists because of it). A second tab by the same person merges into one entry (people, not tabs). Nothing is stored — presence is pure live socket state, no tables, no schema.
+- **Privacy:** the announcement carries the user id ONLY — never an email (emails stay server-resolved behind the signed-in participant gate). **Anonymous link-holders are never announced** and never see the roster. Caveat, accepted for v1: the presence room isn't RLS-gated like table data — it's protected by the unguessable deck id (the same capability-URL model as the share link) and its payload is a bare user id; the stricter Realtime Authorization upgrade would be its own security-relevant change.
+- **Trigger:** `useDeckPresence(deckId, currentUserId)` — joins only when both exist (anonymous viewers never join); wired in `FloatingViewer` + `DeckFeed`.
+- **Source:** `useDeckPresence.ts` (whole file); `Avatar.tsx` (`online` prop); `HuddleFilterStack.tsx` + `HuddleAvatars.tsx` (pass-through + tooltips).
 
 ---
 
@@ -638,13 +656,13 @@ A fourth way to *view* — not a fourth rendering — is the **feed↔deck spect
 ### J8. The Huddlers filter stack — one element: the people AND the filter ⭐ *(Slice 3, 2026-07-03)*
 - **Element:** a floating vertical pill on the far LEFT edge holding every huddler's avatar — it is both the "who's in this huddle" display and the feed filter (founder mock 2026-07-03).
 - **Where:** the spectrum, split/feed modes only — anchored to the **top** of the far-left edge (aligned with the feed region's top, founder call 2026-07-03). `HuddleFilterStack.tsx`; wiring in `FloatingViewer.tsx`; dimming/chip in `FeedStream.tsx` + `FeedItemCard.tsx`. The feed region and divider shift right to make room. **Deck mode hides it entirely** (focused commenting — no huddle display there at all; the top-right G4 cluster is also suppressed throughout the spectrum so the huddle never appears twice).
-- **Order + anatomy (founder rounds 2026-07-03, all round):** on top, a small teal **person icon + the total count** (tooltip "{N} Huddlers"). Then, top→bottom: **YOU** (pinned first, rendered as the account identity — purple person icon + green dot, `Avatar self`); a **grey hairline**; **the AI's model mark** (Claude/ChatGPT logo at **32px** — same footprint as the avatars, so its badge lines up vertically with theirs — generic mark when unknown) carrying a **purple count badge** = versions it published (unique versions − 1, "9+" cap; tooltip "{AI} · published {N} versions"); then **everyone else** (owner first, then by contribution count; up to 8, then "+N"); and a **dashed "+" circle** — the empty seat, directly after the last person (**no divider**) — that copies the share link with the exact same toast as the Share button ("Link copied · anyone with this link can view"; `CopyLinkButton variant="invite"`; the toast clamps on-screen even at the far-left anchor — `AnchoredToast` fix). Each person carries a **teal count badge** bottom-right = their **ACTIONABLE** contributions: the CURRENT round only — live comments on the latest version + open requests + open flags, excluding dismissed/addressed, "9+" cap. Tooltips: **"You — {email} · {N} to action"** (self), **"{name} · deck owner — {email} · {N} to action"** (owner), "{name} · {N} to action" (others). *(Reserved, not built: green "online now" dots for others — needs presence, parked.)*
-- **States (per avatar):** default · hover (scales up) · **selected** (teal halo ring — offset further out for the owner so it clears their ring) · dimmed (someone else is selected).
+- **Order + anatomy (restyled 2026-07-04 per design-system §2.5; the rail is THE PARTICIPANTS, human + AI):** on top, a small teal **person icon + the total count** (tooltip "{N} Huddlers"). Then, top→bottom: **YOU** (pinned first, the account identity — person icon + green dot, `Avatar self`); a **grey hairline**; **the AI's model mark** (Claude/ChatGPT logo at **32px** — same footprint as the avatars — generic lilac "AI" square when unknown; kept deliberately, founder call 2026-07-04: the human/AI collaboration stays visible, but the AI holds a **fixed seat** — never ranked, never dimmed for silence, never a person colour); then **everyone else — owner pinned first, then by contribution count DESCENDING**; zero-contribution members **sink to the bottom, dimmed (~55%) and chip-less** (silence visible at a glance; YOU and the owner never silence-dim); up to 8, then "+N" (now a grey chip); and the **dashed "+" invite seat** (copies the share link, same toast as Share; `CopyLinkButton variant="invite"`). **The ordering SETTLES ON LOAD** — it freezes once the feed data is ready and does not re-sort live mid-session (no avatars hopping while people comment; badge numbers stay live, new joiners append at the bottom; the order catches up on the next load/refresh). **Count badges are one quiet NEUTRAL style for everyone** — a soft grey chip with dark text (bottom-right satellite, same size/offset as before, "9+" cap), the AI's version count included (was teal for people / purple for the AI — no coloured badges, badge colour is a lie). Counts remain **ACTIONABLE** contributions: the CURRENT round only — live comments on the latest version + open requests + open flags, excluding dismissed/addressed. Tooltips now carry the **breakdown**: "You — {email} · {N} to action — {2 comments · 1 request}" (self), "{name} · deck owner — {email} · …" (owner), "{name} · {N} to action — {breakdown}" (others; "no contributions this round" at zero); the AI's badge/tooltip reads "published {N} versions". **Green "online now" dots are LIVE (2026-07-05, G9)** — a dot on whoever has the deck open right now, "· online now" in their tooltip; dot only, dimming keeps meaning "silent".
+- **States (per avatar):** default · hover (scales up) · **selected** (**purple** halo ring — the current selection is the one thing that wears purple, §2.5; was teal) · dimmed 0.35 + desaturated (someone else is selected) · dimmed 0.55 (zero contributions, no filter active).
 - **Behaviour — the filter:** clicking a face filters the feed to that contributor: their cards stay; **everything else HIDES** (dimming made the feed hard to navigate — founder call 2026-07-03); version-spine events always stay (the backbone), and a round whose items are all hidden shows just its version event. Clicking the **AI mark** filters to *its* contributions — every human card hides and the version spine stands alone. A sticky **teal chip** appears at the top of the feed — "Showing {name}'s feedback ✕" / "Showing your feedback ✕" (self) / "Showing {AI}'s versions ✕" — plus "{N} from others hidden" ("{N} feedback items hidden" for the AI). Clicking the same face, or ✕, clears.
   - **Empty filter (2026-07-03):** filtering to a **person with no contributions** replaces the whole spine with a clean empty state — heading **"No contributions from {name} to this deck yet"** ("You haven't contributed to this deck yet" for self) + a line + a **"Show everyone's feedback"** link — instead of the version spine with no cards under it. (The AI filter is exempt — its point is the spine.)
   - **Scroll on clear (2026-07-03):** whenever a filter is **cleared**, the feed scrolls back to the **current version's round** (the same ~15%-from-top position it opens at), so you land on the live comments rather than wherever the filtered view left you.
   - **Mode changes remember the filter**: switch to deck (stack + filter both vanish, filter inert) and back to split/feed — the filter returns visible, chip and all (same pattern as the folded panel, J6). The filter never applies invisibly.
-- **Copy:** stack aria "Huddlers — click one to filter the feed to their feedback"; person tooltip "{You|name}( (owner)) · {N} to action"; AI tooltip "{AI} · publishes the versions"; invite aria/tooltip "Invite someone — copy the share link"; chip copy as above + "✕" (aria "Clear the filter — show everyone's feedback").
+- **Copy:** stack aria "Huddlers — click one to filter the feed to their feedback"; person tooltip "{You|name}( · deck owner) · {N} to action — {breakdown|no contributions this round}"; AI tooltip "{AI} · published {N} version(s)"; invite aria/tooltip "Invite someone — copy the share link"; chip copy as above + "✕" (aria "Clear the filter — show everyone's feedback").
 - **Trigger:** `stackVisible` = spectrum + feed fidelity showing + signed-in + participants > 0 (identities never reach anonymous viewers — they never see the stack).
 - **Source:** `HuddleFilterStack.tsx`; `FloatingViewer.tsx` (`feedFilterUserId`/`activeFeedFilter`, `contributionCounts`, `stackOffset`); `FeedStream.tsx` (chip + `filteredOut`); `FeedItemCard.tsx` (the dim state).
 

@@ -22,6 +22,7 @@ export default function HuddleAvatars({
   participants,
   currentUserId,
   ownerId,
+  onlineIds,
 }: {
   participants: DeckParticipant[];
   currentUserId: string | null;
@@ -29,6 +30,9 @@ export default function HuddleAvatars({
    *  the single place that decides filled (owner) vs outline (collaborator). The
    *  cluster does NOT compute ownership itself, so it can't disagree with the feed. */
   ownerId: string | null;
+  /** Who has the deck open RIGHT NOW (useDeckPresence) — the green presence
+   *  dot on their avatar (2026-07-05). */
+  onlineIds?: Set<string>;
 }) {
   // Everyone except you — your own avatar is the account menu next to this.
   const others = participants.filter((p) => p.userId !== currentUserId);
@@ -64,6 +68,7 @@ export default function HuddleAvatars({
               userId={p.userId}
               ownerId={ownerId}
               email={p.email}
+              online={!!onlineIds?.has(p.userId)}
               size={32}
             />
             {p.commented && (

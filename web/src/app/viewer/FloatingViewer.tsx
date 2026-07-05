@@ -36,11 +36,17 @@ import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
 import CommentNudge, { type NudgeComment } from "./CommentNudge";
 import StubSlideView from "./StubSlideView";
-import SlideFlagControl from "./SlideFlagControl";
+import SlideActionsMenu from "./SlideActionsMenu";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
 import FeedStream from "./FeedStream";
 import HuddleAvatars from "./HuddleAvatars";
-import HuddleFilterStack from "./HuddleFilterStack";
+import HuddleFilterStack, {
+  type ContributionBreakdown,
+} from "./HuddleFilterStack";
+import {
+  PersonColorProvider,
+  buildPersonColorAssignment,
+} from "./person-colors";
 import { ReviewingChip, SharedDeckChip } from "./HuddleChips";
 import ArrivalBanner from "./ArrivalBanner";
 import type { ArrivalActivity } from "./arrival-activity";
@@ -48,12 +54,12 @@ import { useDeckComments } from "./useDeckComments";
 import { useDeckStubs } from "./useDeckStubs";
 import { useDeckFlags } from "./useDeckFlags";
 import { useDeckVersionWatch } from "./useDeckVersionWatch";
+import { useDeckPresence } from "./useDeckPresence";
 import { buildDisplayItems } from "./display-items";
 import type { ConvItem } from "./feed-items";
 import { buildFeedbackPrompt, selectCuratedFeedback } from "./feedback-prompt";
 import { track, identifyUser, registerSuperProperties } from "@/lib/analytics";
 import AvatarMenu from "@/components/AvatarMenu";
-import PortalPopover from "@/components/PortalPopover";
 import type {
   CommentRow,
   DeckParticipant,
@@ -533,9 +539,6 @@ export default function FloatingViewer({
   const [pinned, setPinned] = useState(false);
   const pinnedRef = useRef(false);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Bottom-left settings menu (currently holds the "pin floating bars" toggle).
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsRef = useRef<HTMLButtonElement>(null);
 
   // Read "should stay open" straight from the live DOM, so there's no extra
   // state to keep in sync: an open PortalPopover renders role="dialog"/"menu";
@@ -832,8 +835,6 @@ export default function FloatingViewer({
         : comments.filter((c) => c.slide_index === activeSlideIndex),
     [comments, activeSlideIndex],
   );
-  const currentSlideCommentCount = currentSlideComments.length;
-
   // real slide index → comment count, for the thumbnail badges.
   const commentCountBySlide = useMemo(() => {
     const m = new Map<number, number>();
@@ -934,20 +935,37 @@ export default function FloatingViewer({
   // version + open requested slides + open removal flags, excluding dismissed
   // ("won't send to AI") and already-addressed items. These are the ones the
   // next revision acts on; settled history stays visible in the feed but
-  // doesn't inflate the badges.
+  // doesn't inflate the badges. Kept PER KIND so the stack's tooltip can say
+  // "2 comments · 1 request" (2026-07-04).
   const contributionCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    const bump = (id: string | null) => {
-      if (id) m.set(id, (m.get(id) ?? 0) + 1);
+    const m = new Map<string, ContributionBreakdown>();
+    const bump = (id: string | null, kind: keyof ContributionBreakdown) => {
+      if (!id) return;
+      const b = m.get(id) ?? { comments: 0, requests: 0, removals: 0 };
+      b[kind] += 1;
+      m.set(id, b);
     };
     for (const c of spectrumComments)
-      if (c.version === currentVersion && !c.dismissed) bump(c.user_id);
+      if (c.version === currentVersion && !c.dismissed)
+        bump(c.user_id, "comments");
     for (const s of spectrumStubs)
-      if (!s.dismissed && !s.resolved_at) bump(s.requested_by);
+      if (!s.dismissed && !s.resolved_at) bump(s.requested_by, "requests");
     for (const f of spectrumFlags)
-      if (!f.dismissed && !f.resolved_at) bump(f.flagged_by);
+      if (!f.dismissed && !f.resolved_at) bump(f.flagged_by, "removals");
     return m;
   }, [spectrumComments, spectrumStubs, spectrumFlags, currentVersion]);
+  // Live presence — who has this deck open right now (green dots on the rail
+  // + Huddlers cluster). Signed-in viewers only; anonymous viewers never join.
+  const onlineIds = useDeckPresence(deckId, currentUserId);
+  // The deck's per-huddle person-colour assignment (design-system §2.5):
+  // join order comes from the server-resolved participant list, so every
+  // viewer and every surface (feed cards, panel, stack) agrees. Provided via
+  // context below; Avatar falls back to a deterministic hash for anyone
+  // outside the list (e.g. a stub author who never commented).
+  const personColors = useMemo(
+    () => buildPersonColorAssignment(participants, deckOwnerId),
+    [participants, deckOwnerId],
+  );
   // The AI's provenance for the stack's model mark: the latest version that
   // recorded a source (a deck may mix models across versions; the most recent
   // one is "who's working on it now"). null → the generic AI mark.
@@ -1117,9 +1135,6 @@ export default function FloatingViewer({
   // persistent (§4.1) and never fades — see below. Under
   // `prefers-reduced-motion` we drop the animation and switch instantly.
   const fadeTransition = reducedMotion ? "" : "transition-opacity duration-300";
-  const bottomFade = expanded
-    ? `${fadeTransition} opacity-100`
-    : `${fadeTransition} opacity-0 pointer-events-none`;
 
   // The slide glides into its inset position (size + offset) when a panel opens
   // or closes — 200ms per §3.3; under reduced motion it snaps.
@@ -1128,6 +1143,7 @@ export default function FloatingViewer({
     : "transform 200ms ease, width 200ms ease, height 200ms ease";
 
   return (
+    <PersonColorProvider value={personColors}>
     <div
       ref={stageRef}
       className="relative flex-1 min-w-0 min-h-0 flex items-center justify-center bg-[#f6f6fa] overflow-hidden"
@@ -1183,24 +1199,37 @@ export default function FloatingViewer({
                   transformOrigin: "center center",
                 }}
               />
-              {/* Flag-for-removal — the subtle "…" menu top-left of the slide
-                  (reused from the classic viewer). Hidden on historical views;
-                  the action itself is gated by canFlag (signed-in collaborator,
-                  non-orphan). Its popover portals out, so the card's
-                  overflow-hidden doesn't clip it. */}
+              {/* The slide-scope "+" (Slice C — §2.5 "position answers scope"):
+                  Add a comment · Flag for removal · Request a slide after this,
+                  all on the slide they act on, all through the EXISTING write
+                  paths. Replaces the old standalone "…" flag control here
+                  (classic keeps its own). Hidden on historical views; each
+                  action's own gate (sign-in, orphan) still applies. Its
+                  popover portals out, so the card's overflow-hidden doesn't
+                  clip it. */}
               {isStored && !readOnly && !isOrphanDeck && (
-                <SlideFlagControl
+                <SlideActionsMenu
+                  slideNumber={safeIndex + 1}
                   flag={currentSlideFlag}
                   canFlag={canFlag}
+                  canInsert={canComment}
                   currentUserId={currentUserId}
                   loginHref={loginHref}
-                  position="bottom-right"
+                  onAddComment={() => {
+                    setCommentsPanelOpen(true);
+                    reveal();
+                  }}
                   onFlag={(reason) =>
                     activeSlideIndex !== null
                       ? addFlag(activeSlideIndex, reason)
                       : Promise.resolve()
                   }
                   onUnflag={removeFlag}
+                  onInsertAfter={async (fields) => {
+                    if (activeSlideIndex === null) return;
+                    const id = await insertStub(activeSlideIndex + 1, fields);
+                    if (id) setFocusStubId(id);
+                  }}
                 />
               )}
             </div>
@@ -1299,38 +1328,18 @@ export default function FloatingViewer({
                     viewParam={spectrumOn ? "spectrum" : undefined}
                     modeParam={spectrumOn ? fracToMode(feedFrac) : undefined}
                   />
-                  {/* Export-as-PDF (P0.5). Lives WITH the title/version chip so
-                      it collapses away at rest (founder placement call
-                      2026-07-03) — and sitting beside the chip makes "you're
-                      exporting THIS version" self-evident. Opens the print view
-                      in a new tab; hidden while the deck has no slides. */}
-                  {deck.slides.length > 0 && (
-                    <a
-                      data-floating-control
-                      href={`/viewer/print?id=${deckId}&v=${viewingVersion}`}
-                      target="_blank"
-                      rel="noopener"
-                      onClick={() =>
-                        track("export_pdf_clicked", {
-                          deck_id: deckId,
-                          version: viewingVersion,
-                          surface,
-                        })
-                      }
-                      title={`Export v${viewingVersion} as PDF`}
-                      aria-label={`Export v${viewingVersion} as PDF`}
-                      className="ml-1 h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center text-[#6b6b75] hover:bg-black/[0.05] transition-colors"
-                    >
-                      <ExportIcon />
-                    </a>
-                  )}
                 </Collapsible>
               </>
             )}
           </div>
 
-          {/* TOP-RIGHT — actions: avatar · Send to AI · Comments · Share.
-              Avatar + Send-to-AI collapse at rest; Comments + Share persist. */}
+          {/* TOP-RIGHT — identity + DECK-scope actions only (Slice C, §2.5
+              "position answers scope"): huddle · export · Send to AI · Share
+              (the one filled purple) · your avatar. Slide-scope actions moved
+              onto the slide (the "+" menu); the old unscoped comments toggle
+              is retired (the feed is the comments surface in spectrum; the
+              slide "+" and per-slide counts carry it in deck view). The huddle
+              + export + Send-to-AI collapse at rest; Share + avatar persist. */}
           <div data-floating-control className={`${cluster} top-4 right-4`}>
             {isStored ? (
               <>
@@ -1352,6 +1361,7 @@ export default function FloatingViewer({
                           participants={participants}
                           currentUserId={currentUserId}
                           ownerId={deckOwnerId}
+                          onlineIds={onlineIds}
                         />
                       )
                     ) : reviewingCount >= 1 ? (
@@ -1359,15 +1369,29 @@ export default function FloatingViewer({
                     ) : (
                       <SharedDeckChip />
                     )}
-                    {currentUserEmail ? (
-                      <AvatarMenu email={currentUserEmail} />
-                    ) : (
-                      <Link
-                        href={loginHref}
-                        className="text-sm font-semibold text-brand hover:text-brand-hover px-1 whitespace-nowrap"
+                    {/* Export-as-PDF (P0.5) — a deck-scope action, so it lives
+                        in the deck-scope corner (moved from the top-left title
+                        cluster, Slice C). Version-aware; hidden on empty
+                        decks. */}
+                    {deck.slides.length > 0 && (
+                      <a
+                        data-floating-control
+                        href={`/viewer/print?id=${deckId}&v=${viewingVersion}`}
+                        target="_blank"
+                        rel="noopener"
+                        onClick={() =>
+                          track("export_pdf_clicked", {
+                            deck_id: deckId,
+                            version: viewingVersion,
+                            surface,
+                          })
+                        }
+                        title={`Export v${viewingVersion} as PDF`}
+                        aria-label={`Export v${viewingVersion} as PDF`}
+                        className="h-[30px] w-[30px] rounded-lg shrink-0 flex items-center justify-center text-[#6b6b75] hover:bg-black/[0.05] transition-colors"
                       >
-                        Sign in
-                      </Link>
+                        <ExportIcon />
+                      </a>
                     )}
                     {canSendToAI && (
                       <SendToClaudeButton
@@ -1383,54 +1407,33 @@ export default function FloatingViewer({
                   </span>
                 </Collapsible>
 
-                {showComments && activeSlideIndex !== null && !commentsFolded && (
-                  // Bare at rest (no pill) — Comments only TOGGLE the panel, so
-                  // it's the lightest control in the cluster: a teal speech-bubble
-                  // (teal = the team) + the count. A green wash on hover; when the
-                  // panel is OPEN it fills solid green with white — a clear ON state.
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCommentsPanelOpen((o) => !o);
-                      reveal();
-                    }}
-                    aria-pressed={commentsPanelOpen}
-                    aria-label={
-                      currentSlideCommentCount > 0
-                        ? `Comments (${currentSlideCommentCount})`
-                        : "Comments"
-                    }
-                    title="Comments"
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-semibold shrink-0 transition-colors ${
-                      commentsPanelOpen
-                        ? "bg-[#0F6E56] text-white"
-                        : "text-[#0F6E56] hover:bg-[#D3F0E6]"
-                    }`}
-                  >
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </svg>
-                    {currentSlideCommentCount > 0 && (
-                      <span className="tabular-nums">{currentSlideCommentCount}</span>
-                    )}
-                  </button>
-                )}
-
-                <span className={`shrink-0 ${showComments ? "ml-2" : ""}`}>
+                <span className="shrink-0">
                   <CopyLinkButton label="Share" />
+                </span>
+                {/* Identity persists (it never fades): the account avatar, whose
+                    menu now holds Pin toolbars (the stray bottom gear retired,
+                    Slice C) alongside My huddles / sign out. */}
+                <span className="ml-2 shrink-0 inline-flex items-center">
+                  {currentUserEmail ? (
+                    <AvatarMenu
+                      email={currentUserEmail}
+                      viewerSettings={{ pinned, onTogglePin: togglePin }}
+                    />
+                  ) : (
+                    <Link
+                      href={loginHref}
+                      className="text-sm font-semibold text-brand hover:text-brand-hover px-1 whitespace-nowrap"
+                    >
+                      Sign in
+                    </Link>
+                  )}
                 </span>
               </>
             ) : currentUserEmail ? (
-              <AvatarMenu email={currentUserEmail} />
+              <AvatarMenu
+                email={currentUserEmail}
+                viewerSettings={{ pinned, onTogglePin: togglePin }}
+              />
             ) : (
               <Link
                 href={loginHref}
@@ -1560,98 +1563,6 @@ export default function FloatingViewer({
             {safeIndex + 1} / {itemCount}
             {activeStub !== null ? " · requested slide" : ""}
           </span>
-
-          {/* Settings, bottom-left — a gear that opens a small menu UPWARD
-              (PortalPopover auto-flips above near the bottom edge). It holds the
-              "pin floating bars" toggle. The button is data-floating-control and,
-              while its menu is open, isHeldOpen() keeps the chrome up (role
-              "menu"); when bars are pinned, the chrome never fades at all. The
-              wrapper carries the bottomFade; the menu is portaled to <body>, so
-              it stays put even as the gear fades. */}
-          <div
-            className={`absolute bottom-4 ${
-              spectrumOn ? "right-4 z-40" : "left-4 z-20"
-            } ${bottomFade}`}
-          >
-            <button
-              ref={settingsRef}
-              type="button"
-              data-floating-control
-              onClick={() => {
-                setSettingsOpen((o) => !o);
-                reveal();
-              }}
-              aria-haspopup="menu"
-              aria-expanded={settingsOpen}
-              aria-label="Viewer settings"
-              title="Settings"
-              className="relative h-9 w-9 rounded-xl border flex items-center justify-center backdrop-blur-md shadow-[0_6px_22px_rgba(0,0,0,0.10)] transition-colors hover:bg-white"
-              style={{
-                backgroundColor: "rgba(255,255,255,0.8)",
-                color: "#6b6b75",
-                borderColor: "rgba(0,0,0,0.06)",
-              }}
-            >
-              {/* gear / settings icon */}
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              {/* small purple dot when bars are pinned — shows the active setting
-                  without opening the menu. */}
-              {pinned && (
-                <span
-                  aria-hidden="true"
-                  className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white"
-                  style={{ backgroundColor: "#4A3FB5" }}
-                />
-              )}
-            </button>
-
-            <PortalPopover
-              anchorRef={settingsRef}
-              open={settingsOpen}
-              onClose={() => setSettingsOpen(false)}
-              width={244}
-              placement="bottom-center"
-            >
-              <div
-                role="menu"
-                aria-label="Viewer settings"
-                className="rounded-xl border border-border bg-white p-1.5 shadow-[0_12px_32px_rgba(17,17,17,0.14)]"
-              >
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={pinned}
-                  onClick={togglePin}
-                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[#f4f3fc]"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border"
-                    style={
-                      pinned
-                        ? { backgroundColor: "#4A3FB5", borderColor: "#4A3FB5", color: "#ffffff" }
-                        : { borderColor: "#c9c8d3", color: "transparent" }
-                    }
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </span>
-                  <span className="leading-snug">
-                    <span className="block text-sm font-semibold text-[#1d1d1b]">
-                      Pin floating bars
-                    </span>
-                    <span className="block text-xs text-muted">
-                      Keep the controls from tucking away while you read.
-                    </span>
-                  </span>
-                </button>
-              </div>
-            </PortalPopover>
-          </div>
 
           {/* One-time hint that the controls auto-hide. Subtle, non-blocking,
               and fades out on its own (instant under reduced motion). */}
@@ -1851,6 +1762,8 @@ export default function FloatingViewer({
                     aiSource={spectrumAiSource}
                     aiVersionCount={spectrumAiVersionCount}
                     counts={contributionCounts}
+                    countsReady={spectrumOn}
+                    onlineIds={onlineIds}
                     filterUserId={activeFeedFilter}
                     onToggle={(id) =>
                       setFeedFilterUserId((cur) => (cur === id ? null : id))
@@ -1942,5 +1855,6 @@ export default function FloatingViewer({
         </>
       )}
     </div>
+    </PersonColorProvider>
   );
 }
