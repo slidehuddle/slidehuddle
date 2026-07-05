@@ -148,13 +148,14 @@ export default function VersionSpineEvent({
   // Past-version messages (everything before the current round) read as
   // "settled": the whole event — provenance colour, avatar/AI mark, and the
   // thumbnail strip — desaturates, so only the CURRENT version keeps its amber ✦
-  // / purple vN. Hover returns it to colour for readability. (P1.2 Item A.)
+  // / purple vN. Hover lifts the dim for readability but the greys stay —
+  // settled things never wear hue again (§2.5 achromatic history, 2026-07-04).
   return (
     <div
       className={
         isCurrent
           ? "rounded-xl px-3 py-2.5"
-          : "px-1 py-1.5 transition [filter:grayscale(1)_opacity(0.65)] hover:[filter:none]"
+          : "px-1 py-1.5 transition [filter:grayscale(1)_opacity(0.65)] hover:[filter:grayscale(1)_opacity(1)]"
       }
       style={isCurrent ? { backgroundColor: "#f1eff9" } : undefined}
     >

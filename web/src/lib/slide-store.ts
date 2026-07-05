@@ -692,6 +692,11 @@ export type DeckParticipant = {
   /** Whether this person has left at least one comment on the deck (drives the
    *  small comment marker on their avatar). */
   commented: boolean;
+  /** When this person JOINED the huddle — the earliest of their share row and
+   *  their first comment (null for the owner / when unknown). Drives the
+   *  per-huddle join-order colour assignment (person-colors.tsx): the same
+   *  server-resolved order for every viewer, so every surface agrees. */
+  joinedAt: string | null;
 };
 
 // Build the deduped participant list for a deck: owner (`ownerId`) +
@@ -707,8 +712,14 @@ export async function getDeckParticipants(
 ): Promise<ListLoad<DeckParticipant>> {
   const supabase = getSupabaseAdmin();
   const [sharesRes, commentsRes] = await Promise.all([
-    supabase.from("shared_decks").select("user_id").eq("deck_id", deckId),
-    supabase.from("comments").select("user_id").eq("deck_id", deckId),
+    supabase
+      .from("shared_decks")
+      .select("user_id, created_at")
+      .eq("deck_id", deckId),
+    supabase
+      .from("comments")
+      .select("user_id, created_at")
+      .eq("deck_id", deckId),
   ]);
   if (sharesRes.error) logDbError("participants shares fetch failed", sharesRes.error);
   if (commentsRes.error) {
@@ -718,17 +729,33 @@ export async function getDeckParticipants(
 
   const ids = new Set<string>();
   if (ownerId) ids.add(ownerId);
-  for (const r of (sharesRes.data ?? []) as { user_id: string | null }[]) {
+  // Earliest sighting per person (share row or first comment) — the huddle
+  // "join order" that drives the per-huddle colour assignment.
+  const joinedAt = new Map<string, string>();
+  const sawAt = (id: string | null, at: string | null) => {
+    if (!id || !at) return;
+    const cur = joinedAt.get(id);
+    if (!cur || at < cur) joinedAt.set(id, at);
+  };
+  for (const r of (sharesRes.data ?? []) as {
+    user_id: string | null;
+    created_at: string | null;
+  }[]) {
     if (r.user_id) ids.add(r.user_id);
+    sawAt(r.user_id, r.created_at);
   }
   // Track who has actually commented (a subset of the participants) so the
   // avatar can carry a small "left a comment" marker.
   const commenterIds = new Set<string>();
-  for (const r of (commentsRes.data ?? []) as { user_id: string | null }[]) {
+  for (const r of (commentsRes.data ?? []) as {
+    user_id: string | null;
+    created_at: string | null;
+  }[]) {
     if (r.user_id) {
       ids.add(r.user_id);
       commenterIds.add(r.user_id);
     }
+    sawAt(r.user_id, r.created_at);
   }
 
   const idList = Array.from(ids);
@@ -738,6 +765,7 @@ export async function getDeckParticipants(
     email: emails[id] ?? null,
     isOwner: id === ownerId,
     commented: commenterIds.has(id),
+    joinedAt: joinedAt.get(id) ?? null,
   }));
   rows.sort((a, b) => {
     if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1;

@@ -109,19 +109,6 @@ function authorName(email: string | null): string {
   return email.split("@")[0] || email;
 }
 
-function Avatar({ email }: { email: string | null }) {
-  const letter = (email?.trim()?.[0] ?? "?").toUpperCase();
-  return (
-    <span
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold select-none"
-      style={{ backgroundColor: "#EEEDFE", color: "#3C3489" }}
-      aria-hidden="true"
-    >
-      {letter}
-    </span>
-  );
-}
-
 export default function CommentsPanel({
   slideLabel,
   isStub,
@@ -442,23 +429,20 @@ export default function CommentsPanel({
                 className={`group relative flex flex-col gap-1 transition-opacity ${entry.comment.dismissed ? "opacity-60" : ""} ${cardClass}`}
               >
                 <div className="flex items-center gap-2">
-                  {/* Floating panel (translucent) → the shared Avatar, so the
-                      person matches the feed + huddler stack (I1). Classic
-                      keeps the panel's original local letter avatar. */}
-                  {translucent ? (
-                    <SharedAvatar
-                      userId={entry.comment.user_id}
-                      ownerId={deckOwnerId}
-                      email={entry.comment.author_email}
-                      self={
-                        !!currentUserId &&
-                        entry.comment.user_id === currentUserId
-                      }
-                      size={24}
-                    />
-                  ) : (
-                    <Avatar email={entry.comment.author_email} />
-                  )}
+                  {/* The ONE shared Avatar everywhere — the panel's old local
+                      purple-letter avatar is retired (2026-07-04), so the
+                      person reads identically in the feed, the huddler stack,
+                      and BOTH panel skins (classic included). */}
+                  <SharedAvatar
+                    userId={entry.comment.user_id}
+                    ownerId={deckOwnerId}
+                    email={entry.comment.author_email}
+                    self={
+                      !!currentUserId &&
+                      entry.comment.user_id === currentUserId
+                    }
+                    size={24}
+                  />
                   <span className="text-xs font-semibold text-foreground truncate">
                     {authorName(entry.comment.author_email)}
                   </span>
