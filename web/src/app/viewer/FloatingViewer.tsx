@@ -35,6 +35,7 @@ import CopyLinkButton from "./CopyLinkButton";
 import SendToClaudeButton from "./SendToClaudeButton";
 import CommentsPanel from "./CommentsPanel";
 import CommentNudge, { type NudgeComment } from "./CommentNudge";
+import PresenceNudge, { type NudgeViewer } from "./PresenceNudge";
 import StubSlideView from "./StubSlideView";
 import SlideActionsMenu from "./SlideActionsMenu";
 import FloatingThumbnailStrip from "./FloatingThumbnailStrip";
@@ -387,6 +388,11 @@ export default function FloatingViewer({
   // by an effect further down) — a realtime event always arrives post-render.
   const [nudgeComments, setNudgeComments] = useState<NudgeComment[]>([]);
   const dismissNudge = useCallback(() => setNudgeComments([]), []);
+  // "{Name} is viewing the deck" join toast (founder-requested 2026-07-05).
+  // Shares the comment nudge's slot; comments WIN it — an arriving comment
+  // toast clears any join toast (below, in onRemoteComment).
+  const [nudgeViewers, setNudgeViewers] = useState<NudgeViewer[]>([]);
+  const dismissViewerNudge = useCallback(() => setNudgeViewers([]), []);
   const nudgeCtxRef = useRef({
     commentsFolded: false,
     panelOpenOnSlide: null as number | null,
@@ -397,6 +403,8 @@ export default function FloatingViewer({
       if (ctx.commentsFolded) return;
       if (ctx.panelOpenOnSlide !== null && row.slide_index === ctx.panelOpenOnSlide)
         return;
+      // Comments win the shared toast slot — clear any join toast.
+      setNudgeViewers([]);
       setNudgeComments((prev) =>
         prev.some((i) => i.id === row.id)
           ? prev
@@ -440,11 +448,120 @@ export default function FloatingViewer({
     surface,
     role,
   });
+  // ── UNDO (Ctrl+Z / ⌘Z, founder-requested 2026-07-05) ──────────────────────
+  // A session-local stack: every action YOU take pushes its inverse; the
+  // shortcut pops and runs the latest (up to 20). Inverses reuse the SAME
+  // RLS-checked write paths (a re-created item is a new row — new id, new
+  // timestamp; not byte-perfect history). Re-creates pass {track:false} so
+  // undo cycles never inflate the Gate-G1 feedback_added numbers. The wrapped
+  // handlers below (`*U`) replace the raw hook functions at every call site.
+  const undoStackRef = useRef<{ label: string; run: () => Promise<void> }[]>([]);
+  const [undoToast, setUndoToast] = useState<{ msg: string; n: number } | null>(
+    null,
+  );
+  const pushUndo = (label: string, run: () => Promise<void>) => {
+    undoStackRef.current.push({ label, run });
+    if (undoStackRef.current.length > 20) undoStackRef.current.shift();
+  };
+  // The toast fades on its own (~2.2s).
+  useEffect(() => {
+    if (!undoToast) return;
+    const t = setTimeout(() => setUndoToast(null), 2200);
+    return () => clearTimeout(t);
+  }, [undoToast]);
+
+  const addCommentU = async (slideIndex: number, body: string) => {
+    const id = await addComment(slideIndex, body);
+    if (id)
+      pushUndo("Comment removed", async () => {
+        await deleteComment(id);
+      });
+  };
+  const deleteCommentU = async (id: string) => {
+    const row = comments.find((c) => c.id === id);
+    await deleteComment(id);
+    if (row)
+      pushUndo("Comment restored", async () => {
+        await addComment(row.slide_index, row.body, { track: false });
+      });
+  };
+  const dismissCommentU = async (id: string, dismissed: boolean) => {
+    await dismissComment(id, dismissed);
+    pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
+      await dismissComment(id, !dismissed);
+    });
+  };
+  const editCommentU = async (id: string, text: string | null) => {
+    const prev = comments.find((c) => c.id === id)?.owner_edited_body ?? null;
+    await editComment(id, text);
+    pushUndo("Edit undone", async () => {
+      await editComment(id, prev);
+    });
+  };
+  const addFlagU = async (slideIndex: number, reason: string) => {
+    const id = await addFlag(slideIndex, reason);
+    if (id)
+      pushUndo("Flag removed", async () => {
+        await removeFlag(id);
+      });
+  };
+  const removeFlagU = async (id: string) => {
+    const row = flags.find((f) => f.id === id);
+    await removeFlag(id);
+    if (row)
+      pushUndo("Flag restored", async () => {
+        await addFlag(row.slide_index, row.reason ?? "", { track: false });
+      });
+  };
+  const dismissFlagU = async (id: string, dismissed: boolean) => {
+    await dismissFlag(id, dismissed);
+    pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
+      await dismissFlag(id, !dismissed);
+    });
+  };
+  const insertStubU = async (
+    position: number,
+    fields: { title: string; subtitle: string; body: string },
+  ): Promise<string | null> => {
+    const id = await insertStubU(position, fields);
+    if (id)
+      pushUndo("Requested slide removed", async () => {
+        await deleteStub(id);
+      });
+    return id;
+  };
+  const deleteStubU = async (id: string) => {
+    const row = stubs.find((s) => s.id === id);
+    await deleteStub(id);
+    if (row)
+      pushUndo("Requested slide restored", async () => {
+        await insertStub(
+          row.position,
+          {
+            title: row.title ?? "",
+            subtitle: row.subtitle ?? "",
+            body: row.body ?? "",
+          },
+          { track: false },
+        );
+      });
+  };
+  const dismissStubU = async (id: string, dismissed: boolean) => {
+    await dismissStub(id, dismissed);
+    pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
+      await dismissStub(id, !dismissed);
+    });
+  };
+
   // Notice an out-of-band revision (e.g. the AI publishing a new version) and
   // prompt a refresh — never auto-yank the page. null until a newer version
   // than the one on screen appears.
   const liveNewVersion = useDeckVersionWatch({ deckId, readOnly, viewingVersion });
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
+  // Bumped by the "+ menu → Add a comment" path: the panel opens with the
+  // composer ALREADY focused (founder redesign 2026-07-05). Reading entry
+  // points (arrival banner, comment nudge) don't bump it.
+  const [composeNonce, setComposeNonce] = useState(0);
   const [stripOpen, setStripOpen] = useState(false);
 
   // ── Feed↔deck spectrum (?view=spectrum) ───────────────────────────────────
@@ -604,18 +721,43 @@ export default function FloatingViewer({
   }, [reveal, scheduleCollapse]);
 
   // `T` toggles the thumbnail rail (design system §4.1). Defined after `reveal`
-  // so opening the rail can also reschedule the collapse timer.
+  // so opening the rail can also reschedule the collapse timer. `Escape`
+  // closes the floating comments (2026-07-05 — the headerless panel's
+  // keyboard exit) — but NOT while typing (the composer's own Esc handles
+  // that first) and NOT while a popover menu/dialog is open (they own Esc).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "t" && e.key !== "T") return;
       const el = e.target as HTMLElement | null;
-      if (
-        el &&
+      const typing =
+        !!el &&
         (el.tagName === "INPUT" ||
           el.tagName === "TEXTAREA" ||
-          el.isContentEditable)
-      )
+          el.isContentEditable);
+      if (e.key === "Escape") {
+        if (typing) return;
+        if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        setCommentsPanelOpen(false);
         return;
+      }
+      // Ctrl+Z (Windows/Linux) / ⌘Z (Mac): undo YOUR last action (2026-07-05).
+      // Not while typing — the browser's native text-undo owns the shortcut
+      // there. Shift/Alt chords (redo etc.) are left alone.
+      if (
+        (e.key === "z" || e.key === "Z") &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        if (typing) return;
+        const entry = undoStackRef.current.pop();
+        if (!entry) return;
+        e.preventDefault();
+        void entry.run();
+        setUndoToast({ msg: entry.label, n: Date.now() });
+        return;
+      }
+      if (e.key !== "t" && e.key !== "T") return;
+      if (typing) return;
       if (!deckId) return;
       setStripOpen((o) => !o);
       reveal();
@@ -957,6 +1099,49 @@ export default function FloatingViewer({
   // Live presence — who has this deck open right now (green dots on the rail
   // + Huddlers cluster). Signed-in viewers only; anonymous viewers never join.
   const onlineIds = useDeckPresence(deckId, currentUserId);
+
+  // Join detection for the "{Name} is viewing the deck" toast: diffs
+  // onlineIds against the previous sync, with the guardrails that keep it
+  // quiet: (1) your OWN arrival produces zero toasts — the first non-empty
+  // sync plus a 5s settle window swallow the roster that was already here;
+  // (2) a person re-notifies at most every 5 minutes (refreshes and version
+  // hops rejoin the room within seconds); (3) never yourself; (4) while a
+  // comment nudge shows, joins are dropped (comments win the slot).
+  const prevOnlineRef = useRef<Set<string> | null>(null);
+  const presenceSettledAtRef = useRef<number | null>(null);
+  const lastJoinNotifiedRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const prev = prevOnlineRef.current;
+    prevOnlineRef.current = new Set(onlineIds);
+    if (prev === null) return; // mount
+    if (prev.size === 0) {
+      // First non-empty sync = OUR arrival settling in, not others joining.
+      if (onlineIds.size > 0) presenceSettledAtRef.current = Date.now();
+      return;
+    }
+    const settledAt = presenceSettledAtRef.current ?? 0;
+    if (Date.now() - settledAt < 5_000) return; // roster still settling
+    const joined = [...onlineIds].filter(
+      (id) => !prev.has(id) && id !== currentUserId,
+    );
+    if (joined.length === 0) return;
+    const now = Date.now();
+    const fresh = joined.filter(
+      (id) => now - (lastJoinNotifiedRef.current.get(id) ?? 0) > 5 * 60_000,
+    );
+    if (fresh.length === 0) return;
+    for (const id of fresh) lastJoinNotifiedRef.current.set(id, now);
+    if (nudgeComments.length > 0) return; // a comment toast is up — it wins
+    const emailById = new Map(participants.map((p) => [p.userId, p.email]));
+    setNudgeViewers((cur) => {
+      const merged = [...cur];
+      for (const id of fresh)
+        if (!merged.some((v) => v.userId === id))
+          merged.push({ userId: id, email: emailById.get(id) ?? null });
+      return merged;
+    });
+    track("presence_nudge_shown", { deck_id: deckId, joined: fresh.length });
+  }, [onlineIds, currentUserId, participants, nudgeComments.length, deckId]);
   // The deck's per-huddle person-colour assignment (design-system §2.5):
   // join order comes from the server-resolved participant list, so every
   // viewer and every surface (feed cards, panel, stack) agrees. Provided via
@@ -1170,8 +1355,8 @@ export default function FloatingViewer({
                 isOwner={isOwner}
                 canCurate={canCurate}
                 actionsPlacement="bottom-right"
-                onDelete={deleteStub}
-                onDismiss={dismissStub}
+                onDelete={deleteStubU}
+                onDismiss={dismissStubU}
                 onEdit={editStub}
                 aiName="AI"
               />
@@ -1217,17 +1402,19 @@ export default function FloatingViewer({
                   loginHref={loginHref}
                   onAddComment={() => {
                     setCommentsPanelOpen(true);
+                    // Composer opens focused — cursor ready, no second click.
+                    setComposeNonce((n) => n + 1);
                     reveal();
                   }}
                   onFlag={(reason) =>
                     activeSlideIndex !== null
-                      ? addFlag(activeSlideIndex, reason)
+                      ? addFlagU(activeSlideIndex, reason)
                       : Promise.resolve()
                   }
-                  onUnflag={removeFlag}
+                  onUnflag={removeFlagU}
                   onInsertAfter={async (fields) => {
                     if (activeSlideIndex === null) return;
-                    const id = await insertStub(activeSlideIndex + 1, fields);
+                    const id = await insertStubU(activeSlideIndex + 1, fields);
                     if (id) setFocusStubId(id);
                   }}
                 />
@@ -1477,6 +1664,18 @@ export default function FloatingViewer({
             />
           )}
 
+          {/* "{Name} is viewing the deck" join toast — same slot as the
+              comment nudge; comments win it (joins clear/drop while one
+              shows), so the two can never stack. */}
+          {nudgeComments.length === 0 && nudgeViewers.length > 0 && (
+            <PresenceNudge
+              items={nudgeViewers}
+              deckOwnerId={deckOwnerId}
+              reducedMotion={reducedMotion}
+              onDismiss={dismissViewerNudge}
+            />
+          )}
+
           {/* Out-of-band revision prompt. Appears when the deck was revised
               elsewhere (e.g. the AI publishing a new version via MCP) while you're
               viewing — it PROMPTS rather than auto-refreshing, so a half-typed
@@ -1564,6 +1763,19 @@ export default function FloatingViewer({
             {activeStub !== null ? " · requested slide" : ""}
           </span>
 
+          {/* Undo confirmation — the undone thing may be on another slide, so
+              say what happened. Auto-fades (~2.2s). */}
+          {undoToast && (
+            <span
+              key={undoToast.n}
+              role="status"
+              aria-live="polite"
+              className="absolute bottom-16 left-1/2 z-40 -translate-x-1/2 rounded-full bg-black/75 px-3.5 py-1.5 text-xs font-medium text-white shadow-lg select-none pointer-events-none whitespace-nowrap"
+            >
+              ↶ {undoToast.msg}
+            </span>
+          )}
+
           {/* One-time hint that the controls auto-hide. Subtle, non-blocking,
               and fades out on its own (instant under reduced motion). */}
           {showHint !== null && (
@@ -1577,13 +1789,10 @@ export default function FloatingViewer({
             </div>
           )}
 
-          {/* Comments — a FLOATING overlay over the right of the slide. The slide
-              stays full size behind it (it does not shrink). role="dialog" +
-              data-floating-control make the existing isHeldOpen() guard treat the
-              open panel as "held", so the controls don't collapse while it's open;
-              the panel itself is not tied to `expanded`, so it never fades. It
-              reuses the existing CommentsPanel — only its positioning changes from
-              a docked sidebar to this overlay. */}
+          {/* Comments — FLOATING CARDS over the right of the slide (founder
+              redesign 2026-07-05, Google-Slides-like): no container box, no
+              frosted frame — each card carries its own white + shadow, the
+              slide shows through the gaps. The slide stays full size behind. */}
           {commentsVisible && (
             // role="complementary" (a persistent side panel), NOT role="dialog"
             // — and no data-floating-control — so it does NOT hold the controls
@@ -1592,7 +1801,7 @@ export default function FloatingViewer({
             <div
               role="complementary"
               aria-label={`Comments on slide ${safeIndex + 1}`}
-              className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px] overflow-hidden rounded-2xl border border-border bg-white/50 backdrop-blur-[4px] shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+              className="absolute top-[84px] right-4 bottom-4 z-30 flex w-[340px]"
             >
               <CommentsPanel
                 slideLabel={safeIndex + 1}
@@ -1607,15 +1816,17 @@ export default function FloatingViewer({
                 loginHref={loginHref}
                 onAdd={(body) =>
                   activeSlideIndex !== null
-                    ? addComment(activeSlideIndex, body)
+                    ? addCommentU(activeSlideIndex, body)
                     : Promise.resolve()
                 }
-                onDelete={deleteComment}
-                onDismiss={dismissComment}
-                onEdit={editComment}
-                onFlagDismiss={dismissFlag}
+                onDelete={deleteCommentU}
+                onDismiss={dismissCommentU}
+                onEdit={editCommentU}
+                onFlagDismiss={dismissFlagU}
+                onFlagDelete={removeFlagU}
                 onClose={() => setCommentsPanelOpen(false)}
                 translucent
+                composeNonce={composeNonce}
                 aiName="AI"
                 // I1 fix: the floating panel uses the SHARED <Avatar> (needs
                 // the owner id for its ring), so a person reads identically in
@@ -1660,7 +1871,7 @@ export default function FloatingViewer({
                       canInsert={canComment}
                       loginHref={loginHref}
                       onInsertStub={async (position, fields) => {
-                        const id = await insertStub(position, fields);
+                        const id = await insertStubU(position, fields);
                         if (id) setFocusStubId(id);
                       }}
                     />
@@ -1686,6 +1897,11 @@ export default function FloatingViewer({
                     arrivalActivity={null}
                     onSelectItem={onSelectFeedItem}
                     onSelectVersionSlide={onOpenVersionSlide}
+                    // Deck→feed sync: the feed scrolls to the on-stage slide's
+                    // cluster as you navigate slides (2026-07-05). Feed clicks
+                    // are marked inside FeedStream so they don't scroll back.
+                    activeSlideIndex={activeSlideIndex}
+                    activeVersion={viewingVersion}
                     // "+" insert-between-slides at the FEED fidelity (D3): the
                     // current version's spine strip gets the same insert the
                     // rail has — same insertStub + jump-to-the-new-stub flow.
@@ -1696,7 +1912,7 @@ export default function FloatingViewer({
                             canInsert: canComment,
                             loginHref,
                             onInsert: async (position, fields) => {
-                              const id = await insertStub(position, fields);
+                              const id = await insertStubU(position, fields);
                               if (id) setFocusStubId(id);
                             },
                           }
@@ -1708,10 +1924,10 @@ export default function FloatingViewer({
                     curation={
                       canCurate
                         ? {
-                            dismissComment,
-                            editComment,
-                            dismissStub,
-                            dismissFlag,
+                            dismissComment: dismissCommentU,
+                            editComment: editCommentU,
+                            dismissStub: dismissStubU,
+                            dismissFlag: dismissFlagU,
                           }
                         : null
                     }
@@ -1845,7 +2061,7 @@ export default function FloatingViewer({
                   canInsert={canComment}
                   loginHref={loginHref}
                   onInsertStub={async (position, fields) => {
-                    const id = await insertStub(position, fields);
+                    const id = await insertStubU(position, fields);
                     if (id) setFocusStubId(id);
                   }}
                 />

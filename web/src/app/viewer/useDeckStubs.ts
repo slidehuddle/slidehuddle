@@ -120,10 +120,12 @@ export function useDeckStubs({
   }, [deckId, readOnly]);
 
   // Request a new slide at `position` (number of real slides before it).
-  // Returns the new stub's id so the caller can jump to it.
+  // Returns the new stub's id so the caller can jump to it. `opts.track:
+  // false` skips the analytics event — undo re-creates must not inflate G1.
   async function insertStub(
     position: number,
     fields: { title: string; subtitle: string; body: string },
+    opts?: { track?: boolean },
   ): Promise<string | null> {
     if (!deckId || !currentUserId) return null;
     const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
@@ -150,13 +152,15 @@ export function useDeckStubs({
     };
     setStubs((prev) => [...prev, row]);
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", {
-      kind: "stub",
-      surface,
-      deck_id: deckId,
-      version: viewingVersion,
-      role,
-    });
+    if (opts?.track !== false) {
+      track("feedback_added", {
+        kind: "stub",
+        surface,
+        deck_id: deckId,
+        version: viewingVersion,
+        role,
+      });
+    }
     return row.id;
   }
 

@@ -72,6 +72,14 @@ type Props = {
    *  a thumbnail names a specific version, so the spectrum host can switch to
    *  that version (updating the version pill). DeckFeed just peeks the slide. */
   onSelectVersionSlide?: (slideIndex: number, version: number) => void;
+  /** The slide + version CURRENTLY ON THE STAGE (spectrum only). When the user
+   *  navigates slides on the deck (arrows, thumbnails), the feed scrolls to
+   *  that slide's cluster so the two stay in step (founder call 2026-07-05).
+   *  Feed-originated selections don't scroll back (they're marked internally),
+   *  so clicking a card never yanks the feed. null (a stub on stage, or the
+   *  standalone feed) → no sync. */
+  activeSlideIndex?: number | null;
+  activeVersion?: number;
   /** Optional "+" insert-between-slides (D3) for the CURRENT version's spine
    *  thumbnail strip — the expanded feed's fidelity of the rail's insert.
    *  Omitted (the standalone read-only feed) → no gaps, strip unchanged. */
@@ -117,6 +125,8 @@ export default function FeedStream({
   arrivalActivity,
   onSelectItem,
   onSelectVersionSlide,
+  activeSlideIndex = null,
+  activeVersion,
   insert = null,
   curation = null,
   filterUserId = null,
@@ -217,10 +227,29 @@ export default function FeedStream({
   // ── selection ─────────────────────────────────────────────────────────────
   // The card ring lives here; the SLIDE it points at is emitted to the host.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // A feed-originated navigation (clicking a card / a version thumbnail)
+  // changes the stage's active slide too — mark it so the deck→feed sync
+  // effect (below) doesn't then scroll the feed back on top of the click. A
+  // timeout clears the flag so it can never stick if the stage index didn't
+  // actually change.
+  const selfNavRef = useRef(false);
+  const selfNavTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markSelfNav = useCallback(() => {
+    selfNavRef.current = true;
+    if (selfNavTimer.current) clearTimeout(selfNavTimer.current);
+    selfNavTimer.current = setTimeout(() => {
+      selfNavRef.current = false;
+    }, 250);
+  }, []);
   function selectItem(item: ConvItem, itemVersion: number) {
+    markSelfNav();
     setSelectedKey(item.key);
     onSelectItem?.(item, itemVersion);
   }
+  const selectVersionSlide = (slideIndex: number, version: number) => {
+    markSelfNav();
+    onSelectVersionSlide?.(slideIndex, version);
+  };
 
   // ── huddler filter (Slice 3) ──────────────────────────────────────────────
   // Who authored an item; cards by anyone else HIDE while a filter is active
@@ -282,6 +311,33 @@ export default function FeedStream({
   const scrollToVersion = (v: number) =>
     roundRefs.current.get(v)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
+  // A ref per slide CLUSTER, keyed "version:slideIndex" — the deck→feed sync
+  // scrolls the matching cluster (that round's feedback for the slide on the
+  // stage) to the top of the feed.
+  const clusterRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const setClusterRef =
+    (version: number, slideIndex: number) => (el: HTMLDivElement | null) => {
+      const key = `${version}:${slideIndex}`;
+      if (el) clusterRefs.current.set(key, el);
+      else clusterRefs.current.delete(key);
+    };
+  const scrollToCluster = useCallback((version: number, slideIndex: number) => {
+    const container = scrollRef.current;
+    const el = clusterRefs.current.get(`${version}:${slideIndex}`);
+    if (!container || !el) return; // no feedback on that slide → leave the feed
+    // Instant (not smooth): the feed re-renders often (live data), which
+    // cancels an in-flight smooth animation — and snapping keeps pace with
+    // rapid slide flips instead of lagging behind them.
+    container.scrollTo({
+      top:
+        container.scrollTop +
+        el.getBoundingClientRect().top -
+        container.getBoundingClientRect().top -
+        12,
+      behavior: "auto",
+    });
+  }, []);
+
   // Scroll so the CURRENT version's round sits ~15% below the top (a slice of
   // the previous round shows above). Used to open the feed there, and to return
   // there when a filter is cleared.
@@ -308,6 +364,31 @@ export default function FeedStream({
     scrollToCurrentRound();
     openedRef.current = true;
   }, [currentRoundIndex, parsedByVersion, scrollToCurrentRound]);
+
+  // DECK→FEED SYNC (founder call 2026-07-05): when the stage's slide changes
+  // via deck navigation, scroll the feed to that slide's cluster. Skips the
+  // first run (mount already opens at the current round) and feed-originated
+  // changes (markSelfNav), so clicking a card never scrolls the feed back.
+  const syncMountedRef = useRef(false);
+  useEffect(() => {
+    if (!syncMountedRef.current) {
+      syncMountedRef.current = true;
+      return;
+    }
+    if (selfNavRef.current) return; // feed-originated → don't scroll back
+    if (activeSlideIndex == null || activeVersion == null) return;
+    // Direct call — effects run after commit, so the layout + cluster refs
+    // are ready. (An earlier requestAnimationFrame here was perpetually
+    // cancelled by the feed's frequent re-renders, so the scroll never
+    // landed.) A tiny follow-up retry covers a version-parse race where the
+    // target round's clusters mount a frame late.
+    scrollToCluster(activeVersion, activeSlideIndex);
+    const t = setTimeout(
+      () => scrollToCluster(activeVersion, activeSlideIndex),
+      60,
+    );
+    return () => clearTimeout(t);
+  }, [activeSlideIndex, activeVersion, scrollToCluster]);
 
   // When a filter is CLEARED, return to the current version's comments (founder
   // call 2026-07-03) — the cards reappear, so scroll after the DOM settles.
@@ -439,7 +520,7 @@ export default function FeedStream({
                   deckOwnerId={deckOwnerId}
                   deck={deckForVersion(v.version)}
                   addressed={summary}
-                  onSelectSlide={(idx, ver) => onSelectVersionSlide?.(idx, ver)}
+                  onSelectSlide={(idx, ver) => selectVersionSlide(idx, ver)}
                   // "+" insert only on the CURRENT version's strip (a past
                   // round is a frozen snapshot — no inserts, matching D3's
                   // read-only behaviour).
@@ -558,12 +639,16 @@ export default function FeedStream({
                         const n = cluster.slideIndex + 1;
                         const title = slideTitles[cluster.slideIndex] ?? null;
                         return (
-                          <div key={`slide-${cluster.slideIndex}`} className="flex flex-col gap-1.5">
+                          <div
+                            key={`slide-${cluster.slideIndex}`}
+                            ref={setClusterRef(v.version, cluster.slideIndex)}
+                            className="flex flex-col gap-1.5 scroll-mt-3"
+                          >
                             <div className="flex items-start gap-3">
                               <button
                                 type="button"
                                 onClick={() =>
-                                  onSelectVersionSlide?.(cluster.slideIndex, currentVersion)
+                                  selectVersionSlide(cluster.slideIndex, v.version)
                                 }
                                 aria-label={`Slide ${n} — peek`}
                                 className="shrink-0 rounded-lg transition-transform hover:scale-[1.02]"

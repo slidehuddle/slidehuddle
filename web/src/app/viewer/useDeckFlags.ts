@@ -116,8 +116,14 @@ export function useDeckFlags({
   }, [deckId, readOnly]);
 
   // Flag a real slide for removal (any signed-in collaborator — RLS enforced).
-  async function addFlag(slideIndex: number, reason: string) {
-    if (!deckId || !currentUserId) return;
+  // Returns the saved flag's id (for the undo stack). `opts.track: false`
+  // skips the analytics event — undo re-creates must not inflate G1 numbers.
+  async function addFlag(
+    slideIndex: number,
+    reason: string,
+    opts?: { track?: boolean },
+  ): Promise<string | null> {
+    if (!deckId || !currentUserId) return null;
     const { getSupabaseBrowser } = await import("@/lib/supabase-browser");
     const supabase = getSupabaseBrowser();
     const { data, error } = await supabase
@@ -132,7 +138,7 @@ export function useDeckFlags({
       .single();
     if (error) {
       console.error("[useDeckFlags] flag insert failed:", error);
-      return;
+      return null;
     }
     const row: FlagRow = {
       ...(data as Omit<FlagRow, "flagged_by_email">),
@@ -140,13 +146,16 @@ export function useDeckFlags({
     };
     setFlags((prev) => (prev.some((f) => f.id === row.id) ? prev : [...prev, row]));
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", {
-      kind: "flag",
-      surface,
-      deck_id: deckId,
-      version: viewingVersion,
-      role,
-    });
+    if (opts?.track !== false) {
+      track("feedback_added", {
+        kind: "flag",
+        surface,
+        deck_id: deckId,
+        version: viewingVersion,
+        role,
+      });
+    }
+    return row.id;
   }
 
   // Remove your own flag (RLS: flagger only). Optimistic with revert.

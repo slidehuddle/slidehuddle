@@ -139,9 +139,16 @@ export function useDeckComments({
     };
   }, [deckId, readOnly, viewingVersion, currentUserId]);
 
-  // Add a comment to a given slide (optimistic; reconciled on save).
-  async function addComment(slideIndex: number, body: string) {
-    if (!deckId || !currentUserId) return;
+  // Add a comment to a given slide (optimistic; reconciled on save). Returns
+  // the saved comment's id (for the undo stack). `opts.track: false` skips the
+  // feedback_added analytics event — used by undo re-creates, so undo cycles
+  // never inflate the Gate-G1 numbers.
+  async function addComment(
+    slideIndex: number,
+    body: string,
+    opts?: { track?: boolean },
+  ): Promise<string | null> {
+    if (!deckId || !currentUserId) return null;
     const optimisticId = `temp-${Date.now()}`;
     const optimistic: CommentRow = {
       id: optimisticId,
@@ -173,25 +180,28 @@ export function useDeckComments({
     if (error) {
       console.error("[useDeckComments] comment insert failed:", error);
       setComments((prev) => prev.filter((c) => c.id !== optimisticId));
-      return;
+      return null;
     }
     // Swap the optimistic row for the saved one; dedupe in case the Realtime
     // INSERT for this same row already echoed back.
+    const real = data as CommentRow;
     setComments((prev) => {
-      const real = data as CommentRow;
       const withoutTemp = prev.filter((c) => c.id !== optimisticId);
       return withoutTemp.some((c) => c.id === real.id)
         ? withoutTemp
         : [...withoutTemp, real];
     });
     // Gate evidence: "did feedback volume go up". Fired only on a confirmed save.
-    track("feedback_added", {
-      kind: "comment",
-      surface,
-      deck_id: deckId,
-      version: viewingVersion,
-      role,
-    });
+    if (opts?.track !== false) {
+      track("feedback_added", {
+        kind: "comment",
+        surface,
+        deck_id: deckId,
+        version: viewingVersion,
+        role,
+      });
+    }
+    return real.id;
   }
 
   // Delete a comment (author only — enforced by RLS). Optimistic with revert.
