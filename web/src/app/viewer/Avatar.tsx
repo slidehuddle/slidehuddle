@@ -150,9 +150,10 @@ export default function Avatar({
   self?: boolean;
   /** This person has the deck open RIGHT NOW (useDeckPresence) — the green
    *  presence dot, the ONE state allowed to wear colour (§2.5 rule 3). Passed
-   *  only by the roster surfaces (rail + Huddlers cluster); historical
-   *  surfaces (feed cards, panel) never pass it. `self` avatars carry the dot
-   *  regardless (your own signed-in and online are the same fact). */
+   *  ONLY by the roster surfaces (rail + Huddlers cluster) — feed cards, the
+   *  comments panel, and the nudge never pass it, so NO presence indicator
+   *  ever appears on content (founder call 2026-07-05; applies to `self`
+   *  avatars too — the rail passes online=true for you). */
   online?: boolean;
   size?: number;
   /** Tooltip override; defaults to the display name / email. */
@@ -191,11 +192,13 @@ export default function Avatar({
   ) : null;
 
   if (self) {
-    // "You" — the account identity: person icon + green signed-in dot (for
-    // your own avatar, signed-in and online are the same fact — the presence
-    // exception). Owner-you = the filled purple circle (fill = owner);
-    // collaborator-you = the light account purple (purple = you, §2.2).
-    const dot = Math.max(7, Math.round(size * 0.3));
+    // "You" — the account identity: person icon; owner-you = the filled
+    // purple circle (fill = owner); collaborator-you = the light account
+    // purple (purple = you, §2.2). The green dot renders ONLY when the host
+    // surface passes `online` (the roster/rail) — feed cards, the comments
+    // panel, and the nudge show NO presence indicators (founder call
+    // 2026-07-05: one signal, one place; the old always-on "signed in" dot
+    // on self avatars read as presence and contradicted the rail).
     return (
       <span
         className={`relative ${base}`}
@@ -209,15 +212,7 @@ export default function Avatar({
         aria-label={`${tip} (you)`}
       >
         <PersonIcon color={isOwner ? "#ffffff" : "#3C3489"} />
-        <span
-          aria-hidden="true"
-          className="absolute right-0 top-0 rounded-full ring-2 ring-white"
-          style={{
-            width: dot,
-            height: dot,
-            backgroundColor: PRESENCE_GREEN,
-          }}
-        />
+        {onlineDot}
       </span>
     );
   }

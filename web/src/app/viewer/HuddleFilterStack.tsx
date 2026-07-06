@@ -191,8 +191,11 @@ export default function HuddleFilterStack({
     const ownerTag = isOwner
       ? ` · deck owner${!isSelf && p.email ? ` — ${p.email}` : ""}`
       : "";
-    const online = !isSelf && !!onlineIds?.has(p.userId);
-    const tip = `${who}${ownerTag}${online ? " · online now" : ""} · ${total} to action — ${breakdownText(b)}`;
+    // YOU are by definition here (you're looking at it) → always dotted; the
+    // rail is now the ONLY surface that shows presence (content surfaces pass
+    // no `online`, so no dots there — founder call 2026-07-05).
+    const online = isSelf || !!onlineIds?.has(p.userId);
+    const tip = `${who}${ownerTag}${online && !isSelf ? " · online now" : ""} · ${total} to action — ${breakdownText(b)}`;
     return (
       <button
         key={p.userId}
