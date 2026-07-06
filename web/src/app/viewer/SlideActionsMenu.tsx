@@ -73,20 +73,28 @@ export default function SlideActionsMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         title="This slide"
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-[#4A3FB5] text-white opacity-0 shadow-md group-hover/stage:opacity-100 focus:opacity-100 hover:bg-[#3f35a3] transition-opacity"
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-[#4A3FB5] text-white shadow-[0_10px_30px_rgba(0,0,0,0.28)] hover:bg-[#3f35a3] hover:scale-105 transition-[background-color,transform]"
       >
+        {/* A round speech bubble with a plus at its lower-right (the exact
+            shape the founder picked from the 2026-07-05 mockup round;
+            same-day refinements: 44px, ALWAYS visible — no hover-reveal —
+            and a deep soft shadow so it reads as floating OVER the
+            presentation, like the other floating chrome): "add to the
+            conversation about this slide". */}
         <svg
-          width="16"
-          height="16"
+          width="26"
+          height="26"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2.5"
+          strokeWidth="2"
           strokeLinecap="round"
+          strokeLinejoin="round"
           aria-hidden="true"
         >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
+          <path d="M12.007 19.98a9.869 9.869 0 0 1-4.307-.98l-4.7 1 1.3-3.9c-2.324-3.437-1.426-7.872 2.1-10.374 3.526-2.501 8.59-2.296 11.845.48 2.809 2.397 3.64 6.018 2.304 9.194" />
+          <line x1="16" y1="19" x2="22" y2="19" />
+          <line x1="19" y1="16" x2="19" y2="22" />
         </svg>
       </button>
 
