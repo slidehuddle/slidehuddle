@@ -74,6 +74,10 @@ type Props = {
   onEdit: (id: string, ownerEditedBody: string | null) => Promise<void>;
   /** Owner curation of the slide's removal flag (dismiss only). */
   onFlagDismiss: (id: string, dismissed: boolean) => Promise<void>;
+  /** Delete the slide's removal flag outright — offered to the person who
+   *  raised it (like "Delete" on your own comment). Optional: the classic
+   *  viewer doesn't pass it (its flag lives in its own "…" control). */
+  onFlagDelete?: (id: string) => Promise<void>;
   onClose: () => void;
   /** Floating viewer only: render the panel body translucent (so the slide
    *  shows through, like the thumbnail strip) with each comment on its own
@@ -92,6 +96,11 @@ type Props = {
    *  the feed cards, and the huddler stack. Classic (translucent=false) keeps
    *  the local avatar untouched. */
   deckOwnerId?: string | null;
+  /** Floating panel only (founder redesign 2026-07-05): each time this number
+   *  increments, the composer opens ALREADY FOCUSED — the "+ menu → Add a
+   *  comment" path lands with the cursor ready to type, no second click.
+   *  Reading entry points (arrival banner, comment nudge) leave it alone. */
+  composeNonce?: number;
 };
 
 function formatTime(iso: string): string {
@@ -125,19 +134,20 @@ export default function CommentsPanel({
   onDismiss,
   onEdit,
   onFlagDismiss,
+  onFlagDelete,
   onClose,
   translucent = false,
   aiName = "Claude",
   deckOwnerId = null,
+  composeNonce = 0,
 }: Props) {
-  // When translucent, each comment / placeholder sits on its own opaque white
-  // card so the text stays readable over the see-through panel; off, the entries
-  // sit flat on the panel's solid white exactly as before. `shrink-0` is
-  // essential: the card's `overflow-hidden` (for rounded corners) otherwise
-  // gives it a flex min-size of 0, so the cards squeeze to fit the column
+  // Floating redesign (founder, 2026-07-05 — Google-Slides-like): no container
+  // box, no header. Each comment is its OWN white card with a soft shadow,
+  // floating directly over the stage; the slide shows through the gaps.
+  // `shrink-0` is essential: without it the cards squeeze to fit the column
   // instead of keeping their height and letting the list scroll.
   const cardClass = translucent
-    ? "shrink-0 overflow-hidden rounded-xl border border-border bg-white p-3 shadow-sm"
+    ? "shrink-0 overflow-hidden rounded-xl bg-white p-3 shadow-[0_4px_16px_rgba(0,0,0,0.13)]"
     : "";
   // Owner hover controls (Edit / Dismiss). In the floating viewer they're
   // icon-only (no text), a lighter grey, and nudged in from the card's rounded
@@ -175,6 +185,10 @@ export default function CommentsPanel({
     ...(flag ? [{ kind: "flag" as const, at: flag.created_at, flag }] : []),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
+  // Floating composer textarea — refocused after each post so the user can
+  // type the next comment straight away (founder refinement 2026-07-05).
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
   async function submitDraft() {
     const body = draft.trim();
     if (!body || posting) return;
@@ -183,7 +197,12 @@ export default function CommentsPanel({
     try {
       await onAdd(body);
       setDraft("");
-      setComposing(false);
+      // Floating: STAY open and refocus — ready for the next comment (the
+      // disabled flip during posting drops focus, so re-grab it after the
+      // re-render). Classic keeps its always-open form untouched.
+      if (translucent) {
+        requestAnimationFrame(() => composerRef.current?.focus());
+      }
     } finally {
       setPosting(false);
     }
@@ -204,16 +223,53 @@ export default function CommentsPanel({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [comments.length, translucent]);
 
+  // "+ menu → Add a comment" (composeNonce bumps): open the composer with the
+  // cursor ready — whether the panel just mounted or was already open. The
+  // textarea's autoFocus does the focusing.
+  useEffect(() => {
+    if (!translucent || composeNonce === 0) return;
+    if (!canComment || isStub) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setComposing(true);
+  }, [composeNonce, translucent, canComment, isStub]);
+
   return (
     <aside
       className={`w-[340px] shrink-0 flex flex-col animate-[slideInRight_180ms_ease-out] ${
         translucent ? "" : "border-l border-border bg-white"
       }`}
     >
+      {/* Floating redesign: NO header — the slide on screen says where you
+          are (and in split/feed the feed scrolls to the slide's cluster), the
+          cards themselves say what's here. Just a small ghost ✕ (Esc works
+          too). Classic keeps its full header below. */}
+      {translucent ? (
+        <div className="flex shrink-0 justify-end px-2 pt-2 pb-1">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close comments"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/75 text-muted shadow-sm backdrop-blur-sm transition-colors hover:bg-white hover:text-foreground"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      ) : (
       <header
-        className={`flex items-center justify-between px-4 py-3 border-b border-border ${
-          translucent ? "bg-white" : ""
-        }`}
+        className={`flex items-center justify-between px-4 py-3 border-b border-border`}
       >
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold text-foreground">
@@ -283,10 +339,13 @@ export default function CommentsPanel({
           </svg>
         </button>
       </header>
+      )}
 
       <div
         ref={listRef}
-        className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4"
+        className={`flex-1 overflow-y-auto flex flex-col ${
+          translucent ? "px-2 pb-2 pt-1 gap-2.5" : "px-4 py-4 gap-4"
+        }`}
       >
         {isStub ? (
           <p className={`text-sm text-muted leading-relaxed ${cardClass}`}>
@@ -304,7 +363,7 @@ export default function CommentsPanel({
               // removal colour scheme and attributed to whoever flagged it.
               <div
                 key="flag"
-                className={`group relative rounded-lg p-3 flex flex-col gap-1.5 transition-opacity ${entry.flag.dismissed ? "opacity-60" : ""} ${translucent ? "shadow-sm" : ""}`}
+                className={`group relative p-3 flex flex-col gap-1.5 transition-opacity ${entry.flag.dismissed ? "opacity-60" : ""} ${translucent ? "shrink-0 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.13)]" : "rounded-lg"}`}
                 style={{ backgroundColor: "#FCEBEB" }}
               >
                 <div className="flex items-center gap-2">
@@ -365,6 +424,24 @@ export default function CommentsPanel({
                 >
                   by {authorName(entry.flag.flagged_by_email)}
                 </span>
+                {/* Delete — for the person who raised the flag (mirrors the
+                    "Delete" on your own comment), so removing a removal
+                    request is one click. Hidden once dismissed (that's the
+                    owner's separate curation state, with its own Restore). */}
+                {onFlagDelete &&
+                  canComment &&
+                  !entry.flag.dismissed &&
+                  !!currentUserId &&
+                  entry.flag.flagged_by === currentUserId && (
+                    <button
+                      type="button"
+                      onClick={() => onFlagDelete(entry.flag.id)}
+                      className="self-start text-xs font-semibold underline"
+                      style={{ color: "#791F1F" }}
+                    >
+                      Delete
+                    </button>
+                  )}
                 {entry.flag.dismissed && (
                   <p className="text-xs" style={{ color: "#791F1F" }}>
                     Won&apos;t send to {aiName}
@@ -625,48 +702,67 @@ export default function CommentsPanel({
         (canComment ? (
           translucent ? (
             composing ? (
-              // Inline composer — mirrors the owner edit flow (textarea + Save /
-              // Cancel). Opening it on demand keeps the footer tiny the rest of
-              // the time, leaving more room for the comment list.
-              <div className="border-t border-border p-3 bg-white flex flex-col gap-2">
+              // Floating composer card (founder redesign 2026-07-05): opens
+              // ALREADY FOCUSED from the "+ menu → Add a comment" path and
+              // STAYS open after each send, refocused for the next comment.
+              // Keyboard: Enter sends · Alt+Enter inserts a new line (manual —
+              // browsers don't insert on Alt+Enter natively) · Esc clears +
+              // closes (Esc when empty closes the whole surface). No hint
+              // copy (founder call) — the Send button covers mouse users.
+              <div className="shrink-0 relative z-10 mx-2 mb-2 mt-1 rounded-xl bg-white p-3 shadow-[0_4px_16px_rgba(0,0,0,0.16)] border-2 border-[#4A3FB5]/30 flex flex-col gap-2">
                 <textarea
+                  ref={composerRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (e.altKey) {
+                        const el = e.currentTarget;
+                        el.setRangeText(
+                          "\n",
+                          el.selectionStart ?? el.value.length,
+                          el.selectionEnd ?? el.value.length,
+                          "end",
+                        );
+                        setDraft(el.value);
+                      } else {
+                        void submitDraft();
+                      }
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const hadText = draft.trim().length > 0;
+                      setDraft("");
+                      setComposing(false);
+                      if (!hadText) onClose();
+                    }
+                  }}
                   placeholder="Add a comment…"
-                  rows={3}
+                  rows={2}
                   maxLength={4000}
                   autoFocus
                   disabled={posting}
-                  className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 resize-none"
+                  className="rounded-lg border-0 bg-white px-1 py-0.5 text-sm text-foreground placeholder:text-muted focus:outline-none resize-none"
                 />
-                <div className="flex items-center gap-3">
+                <div className="flex items-center">
                   <button
                     type="button"
                     disabled={posting || !draft.trim()}
                     onClick={submitDraft}
-                    className="inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="ml-auto inline-flex items-center rounded-lg bg-brand text-white text-xs font-semibold px-3 py-1.5 hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {posting ? "Saving…" : "Save"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setComposing(false);
-                      setDraft("");
-                    }}
-                    className="text-xs text-muted hover:text-foreground transition-colors"
-                  >
-                    Cancel
+                    {posting ? "Sending…" : "Send"}
                   </button>
                 </div>
               </div>
             ) : (
-              // Collapsed state — just a "+" that opens the composer above.
-              <div className="border-t border-border p-3 bg-white">
+              // Collapsed state — a floating "+" card that opens the composer.
+              <div className="shrink-0 mx-2 mb-2">
                 <button
                   type="button"
                   onClick={() => setComposing(true)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-sm font-semibold text-brand hover:border-brand hover:bg-brand/5 transition-colors"
+                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/90 py-2.5 text-sm font-semibold text-brand shadow-[0_4px_16px_rgba(0,0,0,0.13)] hover:bg-white hover:text-brand-hover transition-colors"
                 >
                   <svg
                     width="16"
@@ -723,20 +819,20 @@ export default function CommentsPanel({
             </form>
           )
         ) : readOnly ? (
-          <div className={`border-t border-border p-3 ${translucent ? "bg-white" : ""}`}>
+          <div className={translucent ? "shrink-0 mx-2 mb-2 rounded-xl bg-white p-3 shadow-[0_4px_16px_rgba(0,0,0,0.13)]" : "border-t border-border p-3"}>
             <p className="text-sm text-muted">
               Comments are read-only on past versions.
             </p>
           </div>
         ) : isOrphanDeck ? (
-          <div className={`border-t border-border p-3 ${translucent ? "bg-white" : ""}`}>
+          <div className={translucent ? "shrink-0 mx-2 mb-2 rounded-xl bg-white p-3 shadow-[0_4px_16px_rgba(0,0,0,0.13)]" : "border-t border-border p-3"}>
             <p className="text-sm text-muted leading-relaxed">
               Comments aren&apos;t available yet — this deck hasn&apos;t been
               claimed by its creator. Ask them to claim it to turn on commenting.
             </p>
           </div>
         ) : (
-          <div className={`border-t border-border p-3 flex flex-col gap-2 ${translucent ? "bg-white" : ""}`}>
+          <div className={`flex flex-col gap-2 ${translucent ? "shrink-0 mx-2 mb-2 rounded-xl bg-white p-3 shadow-[0_4px_16px_rgba(0,0,0,0.13)]" : "border-t border-border p-3"}`}>
             <p className="text-sm text-muted">Sign in to comment.</p>
             <Link
               href={loginHref}
