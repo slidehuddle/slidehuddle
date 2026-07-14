@@ -301,19 +301,29 @@ async function main() {
 
   // ---- Viewer page: version chip + viewing a previous version ----
   console.log("\nLive — viewer page (version UI)");
+  // Default view (floating viewer): its chrome (version chip, warnings) is
+  // client-rendered, so the SSR HTML can only prove the version DATA path —
+  // that the right snapshot was rendered for the requested version.
   const pageCur = await fetch(`${BASE}/viewer?id=${deckId}`);
   const pageCurHtml = await pageCur.text();
   assert(pageCur.status === 200, "GET /viewer?id=… → 200", String(pageCur.status));
-  assert(pageCurHtml.includes("view version history"), "version chip is present", "chip aria-label not found");
-  assert(pageCurHtml.includes("Version 2"), "chip shows the current version (v2)", "expected 'Version 2' in chip");
   assert(pageCurHtml.includes("Pricing"), "current view renders the latest (v2) slides", "v2 content missing");
 
   const pageV1 = await fetch(`${BASE}/viewer?id=${deckId}&v=1`);
   const pageV1Html = await pageV1.text();
   assert(pageV1.status === 200, "GET /viewer?id=…&v=1 → 200", String(pageV1.status));
   assert(pageV1Html.includes("Roadmap") && !pageV1Html.includes("Pricing"), "viewing v1 renders the ORIGINAL slides (no v2 content)", "v1 view wrong");
-  assert(pageV1Html.includes("past version of this deck"), "historical view shows the 'past version' bar", "historical bar missing");
-  assert(pageV1Html.includes("Version 2"), "chip still shows current version while viewing history", "chip missing on historical view");
+
+  // Version CHROME is only server-rendered by the classic viewer
+  // (?view=classic), so assert it there. Retire these four with classic at the
+  // Phase-7 cutover.
+  const classicCurHtml = await (await fetch(`${BASE}/viewer?id=${deckId}&view=classic`)).text();
+  assert(classicCurHtml.includes("view version history"), "classic: version chip is present", "chip aria-label not found");
+  assert(classicCurHtml.includes("Version 2"), "classic: chip shows the current version (v2)", "expected 'Version 2' in chip");
+
+  const classicV1Html = await (await fetch(`${BASE}/viewer?id=${deckId}&v=1&view=classic`)).text();
+  assert(classicV1Html.includes("past version of this deck"), "classic: historical view shows the 'past version' bar", "historical bar missing");
+  assert(classicV1Html.includes("The latest is v2"), "classic: historical view names the latest version", "latest-version copy missing on historical view");
 
   // Cleanup the test deck (cascade removes versions).
   await deleteDeck(deckId);

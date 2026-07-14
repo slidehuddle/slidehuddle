@@ -219,7 +219,12 @@ export function useDeckComments({
 
   // Owner-only: dismiss/restore a comment (exclude from the AI prompt). The
   // owner check happens server-side in the action; revert on failure.
-  async function dismissComment(id: string, dismissed: boolean) {
+  // `opts.track: false` skips the feedback_curated event (undo re-flips).
+  async function dismissComment(
+    id: string,
+    dismissed: boolean,
+    opts?: { track?: boolean },
+  ) {
     if (!deckId) return;
     const snapshot = comments;
     setComments((prev) =>
@@ -229,12 +234,27 @@ export function useDeckComments({
     if (!res.ok) {
       console.error("[useDeckComments] comment dismiss failed:", res.error);
       setComments(snapshot);
+      return;
+    }
+    // Moat-health evidence (docs/G1-MEASUREMENT.md §4, optional event): is the
+    // owner-curation feature actually used? Fired only on a confirmed save.
+    if (opts?.track !== false) {
+      track("feedback_curated", {
+        action: dismissed ? "dismiss" : "restore",
+        kind: "comment",
+        deck_id: deckId,
+        role,
+      });
     }
   }
 
   // Owner-only: set/clear the owner-edited text sent to the AI. The author's
   // original `body` is never mutated. Server action enforces ownership.
-  async function editComment(id: string, ownerEditedBody: string | null) {
+  async function editComment(
+    id: string,
+    ownerEditedBody: string | null,
+    opts?: { track?: boolean },
+  ) {
     if (!deckId) return;
     const snapshot = comments;
     setComments((prev) =>
@@ -248,6 +268,15 @@ export function useDeckComments({
     if (!res.ok) {
       console.error("[useDeckComments] comment edit failed:", res.error);
       setComments(snapshot);
+      return;
+    }
+    if (opts?.track !== false) {
+      track("feedback_curated", {
+        action: "edit",
+        kind: "comment",
+        deck_id: deckId,
+        role,
+      });
     }
   }
 

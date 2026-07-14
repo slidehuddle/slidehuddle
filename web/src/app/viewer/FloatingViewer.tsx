@@ -488,14 +488,14 @@ export default function FloatingViewer({
   const dismissCommentU = async (id: string, dismissed: boolean) => {
     await dismissComment(id, dismissed);
     pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
-      await dismissComment(id, !dismissed);
+      await dismissComment(id, !dismissed, { track: false });
     });
   };
   const editCommentU = async (id: string, text: string | null) => {
     const prev = comments.find((c) => c.id === id)?.owner_edited_body ?? null;
     await editComment(id, text);
     pushUndo("Edit undone", async () => {
-      await editComment(id, prev);
+      await editComment(id, prev, { track: false });
     });
   };
   const addFlagU = async (slideIndex: number, reason: string) => {
@@ -516,14 +516,14 @@ export default function FloatingViewer({
   const dismissFlagU = async (id: string, dismissed: boolean) => {
     await dismissFlag(id, dismissed);
     pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
-      await dismissFlag(id, !dismissed);
+      await dismissFlag(id, !dismissed, { track: false });
     });
   };
   const insertStubU = async (
     position: number,
     fields: { title: string; subtitle: string; body: string },
   ): Promise<string | null> => {
-    const id = await insertStubU(position, fields);
+    const id = await insertStub(position, fields);
     if (id)
       pushUndo("Requested slide removed", async () => {
         await deleteStub(id);
@@ -549,7 +549,7 @@ export default function FloatingViewer({
   const dismissStubU = async (id: string, dismissed: boolean) => {
     await dismissStub(id, dismissed);
     pushUndo(dismissed ? "Dismiss undone" : "Restore undone", async () => {
-      await dismissStub(id, !dismissed);
+      await dismissStub(id, !dismissed, { track: false });
     });
   };
 

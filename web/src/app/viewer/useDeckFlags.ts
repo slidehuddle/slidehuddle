@@ -173,7 +173,12 @@ export function useDeckFlags({
 
   // Owner-only: dismiss/restore a flag (exclude from the AI prompt). The server
   // action enforces ownership; revert on failure.
-  async function dismissFlag(flagId: string, dismissed: boolean) {
+  // `opts.track: false` skips the feedback_curated event (undo re-flips).
+  async function dismissFlag(
+    flagId: string,
+    dismissed: boolean,
+    opts?: { track?: boolean },
+  ) {
     if (!deckId) return;
     const snapshot = flags;
     setFlags((prev) =>
@@ -183,6 +188,16 @@ export function useDeckFlags({
     if (!res.ok) {
       console.error("[useDeckFlags] flag dismiss failed:", res.error);
       setFlags(snapshot);
+      return;
+    }
+    // Moat-health evidence (docs/G1-MEASUREMENT.md §4, optional event).
+    if (opts?.track !== false) {
+      track("feedback_curated", {
+        action: dismissed ? "dismiss" : "restore",
+        kind: "flag",
+        deck_id: deckId,
+        role,
+      });
     }
   }
 

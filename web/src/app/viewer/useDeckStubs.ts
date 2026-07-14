@@ -177,7 +177,12 @@ export function useDeckStubs({
   }
 
   // Owner-only: dismiss/restore a requested slide (exclude from the AI prompt).
-  async function dismissStub(stubId: string, dismissed: boolean) {
+  // `opts.track: false` skips the feedback_curated event (undo re-flips).
+  async function dismissStub(
+    stubId: string,
+    dismissed: boolean,
+    opts?: { track?: boolean },
+  ) {
     if (!deckId) return;
     const snapshot = stubs;
     setStubs((prev) =>
@@ -187,6 +192,16 @@ export function useDeckStubs({
     if (!res.ok) {
       console.error("[useDeckStubs] stub dismiss failed:", res.error);
       setStubs(snapshot);
+      return;
+    }
+    // Moat-health evidence (docs/G1-MEASUREMENT.md §4, optional event).
+    if (opts?.track !== false) {
+      track("feedback_curated", {
+        action: dismissed ? "dismiss" : "restore",
+        kind: "stub",
+        deck_id: deckId,
+        role,
+      });
     }
   }
 
@@ -215,7 +230,16 @@ export function useDeckStubs({
     if (!res.ok) {
       console.error("[useDeckStubs] stub edit failed:", res.error);
       setStubs(snapshot);
+      return;
     }
+    // Curation evidence; `role` disambiguates owner curation from a requester
+    // editing their own request (this action allows both).
+    track("feedback_curated", {
+      action: "edit",
+      kind: "stub",
+      deck_id: deckId,
+      role,
+    });
   }
 
   return { stubs, insertStub, deleteStub, dismissStub, editStub };
